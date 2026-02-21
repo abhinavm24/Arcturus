@@ -126,7 +126,7 @@ function DocumentViewer({ tree }: { tree: any }) {
 }
 
 function SectionNode({ section }: { section: any }) {
-    const Tag = `h${Math.min(section.level || 1, 4)}` as keyof JSX.IntrinsicElements;
+    const Tag = `h${Math.min(section.level || 1, 4)}` as keyof React.JSX.IntrinsicElements;
     const sizes: Record<number, string> = { 1: 'text-lg font-bold', 2: 'text-base font-semibold', 3: 'text-sm font-semibold', 4: 'text-sm font-medium' };
     return (
         <div className="mb-3" style={{ paddingLeft: ((section.level || 1) - 1) * 16 }}>
