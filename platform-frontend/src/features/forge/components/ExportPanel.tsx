@@ -145,13 +145,23 @@ export function ExportPanel({ artifact }: { artifact: any }) {
 
     const handleDownload = async (job: any) => {
         const url = api.getExportDownloadUrl(artifact.id, job.id);
+        const defaultName = `${artifact.title || 'slides'}.pptx`;
         try {
+            // Electron: native Save dialog + auto-open
+            if ((window as any).electronAPI) {
+                const result = await (window as any).electronAPI.invoke('dialog:saveAndOpen', { url, defaultName });
+                if (!result?.success && !result?.canceled) {
+                    console.error('Save failed:', result?.error);
+                }
+                return;
+            }
+            // Browser fallback: blob download
             const resp = await fetch(url);
             const blob = await resp.blob();
             const blobUrl = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = blobUrl;
-            a.download = `${artifact.title || 'slides'}.pptx`;
+            a.download = defaultName;
             document.body.appendChild(a);
             a.click();
             a.remove();

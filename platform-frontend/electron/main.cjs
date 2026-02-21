@@ -694,6 +694,42 @@ function setupDialogHandlers() {
         });
     });
 
+    // Save file via native dialog and auto-open in default app
+    ipcMain.handle('dialog:saveAndOpen', async (event, { url, defaultName }) => {
+        try {
+            const result = await dialog.showSaveDialog(mainWindow, {
+                defaultPath: defaultName || 'download',
+                filters: [
+                    { name: 'PowerPoint', extensions: ['pptx'] },
+                    { name: 'All Files', extensions: ['*'] }
+                ]
+            });
+            if (result.canceled || !result.filePath) {
+                return { success: true, canceled: true };
+            }
+            // Fetch the file in the main process to avoid binary corruption
+            const http = require('http');
+            const https = require('https');
+            const fetchBuffer = (fetchUrl) => new Promise((resolve, reject) => {
+                const mod = fetchUrl.startsWith('https') ? https : http;
+                mod.get(fetchUrl, (res) => {
+                    const chunks = [];
+                    res.on('data', (chunk) => chunks.push(chunk));
+                    res.on('end', () => resolve(Buffer.concat(chunks)));
+                    res.on('error', reject);
+                }).on('error', reject);
+            });
+            const buffer = await fetchBuffer(url);
+            fs.writeFileSync(result.filePath, buffer);
+            // Open in default application (Keynote/PowerPoint/etc.)
+            const openError = await shell.openPath(result.filePath);
+            return { success: true, canceled: false, filePath: result.filePath, openError: openError || null };
+        } catch (error) {
+            console.error('[Arcturus] dialog:saveAndOpen failed', error);
+            return { success: false, error: error.message };
+        }
+    });
+
     ipcMain.on('dialog:confirmSync', (event, { message, title, type = 'question' }) => {
         const { nativeImage } = require('electron');
         const icon = nativeImage.createFromPath(iconPath);
