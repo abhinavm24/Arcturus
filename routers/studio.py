@@ -30,6 +30,7 @@ class ApproveOutlineRequest(BaseModel):
 class ExportArtifactRequest(BaseModel):
     format: str = "pptx"
     theme_id: Optional[str] = None
+    strict_layout: bool = False
 
 
 # === Validators ===
@@ -133,10 +134,19 @@ async def approve_outline(artifact_id: str, request: ApproveOutlineRequest):
 # --- Static GET routes MUST come before /{artifact_id} ---
 
 @router.get("/themes")
-async def list_themes_endpoint():
-    """List all available themes."""
+async def list_themes_endpoint(
+    include_variants: bool = False,
+    base_id: Optional[str] = None,
+    limit: Optional[int] = None,
+):
+    """List available themes. Defaults to base themes only for backward compatibility."""
     from core.studio.slides.themes import list_themes
-    return [t.model_dump() for t in list_themes()]
+    themes = list_themes(
+        include_variants=include_variants,
+        base_id=base_id,
+        limit=limit,
+    )
+    return [t.model_dump() for t in themes]
 
 
 @router.get("/exports/{export_job_id}")
@@ -223,6 +233,7 @@ async def export_artifact(artifact_id: str, request: ExportArtifactRequest):
             artifact_id=artifact_id,
             export_format=export_format,
             theme_id=request.theme_id,
+            strict_layout=request.strict_layout,
         )
         return result
     except HTTPException:

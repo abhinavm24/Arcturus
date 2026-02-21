@@ -36,6 +36,36 @@ class AssetKind(str, Enum):
     theme = "theme"
 
 
+class ChartType(str, Enum):
+    bar = "bar"
+    line = "line"
+    pie = "pie"
+    funnel = "funnel"
+    scatter = "scatter"
+
+
+# === Chart Models ===
+
+class ChartSeries(BaseModel):
+    name: str
+    values: List[float]
+
+
+class ScatterPoint(BaseModel):
+    x: float
+    y: float
+
+
+class ChartSpec(BaseModel):
+    chart_type: Optional[ChartType] = None
+    title: Optional[str] = None
+    categories: List[str] = Field(default_factory=list)
+    series: List[ChartSeries] = Field(default_factory=list)
+    points: List[ScatterPoint] = Field(default_factory=list)
+    x_label: Optional[str] = None
+    y_label: Optional[str] = None
+
+
 # === Content Tree Models ===
 
 class SlideElement(BaseModel):
@@ -159,6 +189,9 @@ class SlideTheme(BaseModel):
     font_heading: str
     font_body: str
     description: Optional[str] = None
+    base_theme_id: Optional[str] = None
+    variant_seed: Optional[int] = None
+    background_style: Optional[str] = None
 
 
 # === Core Models ===

@@ -292,3 +292,124 @@ def test_13_upstream_failure_graceful_downstream(orchestrator, storage, monkeypa
     assert loaded is not None
     assert loaded.content_tree is None
     assert loaded.outline is not None
+
+
+# === Phase 3: Cross-component integration tests ===
+
+def test_14_outline_to_draft_with_notes_repair(orchestrator, storage, mock_llm) -> None:
+    """Draft path applies notes repair; saved content tree has no empty notes."""
+    result = _run(orchestrator.generate_outline(
+        prompt="Create slides",
+        artifact_type=ArtifactType.slides,
+    ))
+    art_id = result["artifact_id"]
+    art_data = _run(orchestrator.approve_and_generate_draft(art_id))
+
+    ct = art_data["content_tree"]
+    for slide in ct["slides"]:
+        notes = slide.get("speaker_notes", "")
+        assert notes and len(notes.strip()) > 0, f"Slide {slide['id']} has empty notes after repair"
+
+
+def test_15_chart_payload_to_export_pipeline(orchestrator, storage, monkeypatch) -> None:
+    """Structured chart data in mock LLM response exports with chart shape."""
+    chart_draft = json.dumps({
+        "deck_title": "Chart Deck",
+        "subtitle": "Data Driven",
+        "slides": [
+            {"id": "s1", "slide_type": "title", "title": "Intro",
+             "elements": [{"id": "e1", "type": "title", "content": "Charts"}],
+             "speaker_notes": "Welcome to the data presentation."},
+            {"id": "s2", "slide_type": "chart", "title": "Revenue",
+             "elements": [{"id": "e2", "type": "chart", "content": {
+                 "chart_type": "bar",
+                 "categories": ["Q1", "Q2", "Q3", "Q4"],
+                 "series": [{"name": "Revenue", "values": [1.0, 2.0, 3.0, 4.0]}],
+             }}],
+             "speaker_notes": "Discuss the revenue growth trajectory across quarters."},
+            {"id": "s3", "slide_type": "content", "title": "Summary",
+             "elements": [{"id": "e3", "type": "body", "content": "We grew 4x."}],
+             "speaker_notes": "Summarize key takeaways."},
+            {"id": "s4", "slide_type": "content", "title": "Market",
+             "elements": [{"id": "e4", "type": "body", "content": "Large market."}],
+             "speaker_notes": "Explain the market opportunity."},
+            {"id": "s5", "slide_type": "content", "title": "Team",
+             "elements": [{"id": "e5", "type": "body", "content": "Strong team."}],
+             "speaker_notes": "Introduce the team background."},
+            {"id": "s6", "slide_type": "content", "title": "Strategy",
+             "elements": [{"id": "e6", "type": "body", "content": "Go to market."}],
+             "speaker_notes": "Walk through the go-to-market strategy."},
+            {"id": "s7", "slide_type": "content", "title": "Product",
+             "elements": [{"id": "e7", "type": "body", "content": "Great product."}],
+             "speaker_notes": "Highlight key product features."},
+            {"id": "s8", "slide_type": "title", "title": "Thanks",
+             "elements": [{"id": "e8", "type": "title", "content": "Thank You"}],
+             "speaker_notes": "Close and take questions."},
+        ],
+    })
+
+    async def fake_generate(self, prompt):
+        if "content architect" in prompt.lower():
+            return OUTLINE_RESPONSE
+        return chart_draft
+    monkeypatch.setattr("core.model_manager.ModelManager.generate_text", fake_generate)
+
+    result = _run(orchestrator.generate_outline(
+        prompt="Create slides with charts",
+        artifact_type=ArtifactType.slides,
+    ))
+    art_id = result["artifact_id"]
+    _run(orchestrator.approve_and_generate_draft(art_id))
+
+    export_result = _run(orchestrator.export_artifact(art_id, ExportFormat.pptx))
+    assert export_result["status"] == "completed"
+
+    # Verify chart shape in exported PPTX
+    from pptx import Presentation as PptxPrs
+    prs = PptxPrs(export_result["output_uri"])
+    chart_slide = prs.slides[1]
+    has_chart = any(s.has_chart for s in chart_slide.shapes)
+    assert has_chart
+
+
+def test_16_variant_theme_export_pipeline(orchestrator, storage, mock_llm) -> None:
+    """Export with variant theme ID succeeds."""
+    result = _run(orchestrator.generate_outline(
+        prompt="Create slides",
+        artifact_type=ArtifactType.slides,
+    ))
+    art_id = result["artifact_id"]
+    _run(orchestrator.approve_and_generate_draft(art_id))
+
+    export_result = _run(orchestrator.export_artifact(
+        art_id, ExportFormat.pptx, theme_id="corporate-blue--v01"
+    ))
+    assert export_result["status"] == "completed"
+
+
+def test_17_quality_rejection_preserves_artifact_state(orchestrator, storage, mock_llm) -> None:
+    """Failed strict export does not modify artifact content_tree or revision_head_id."""
+    from core.schemas.studio_schema import Artifact as ArtifactModel
+
+    result = _run(orchestrator.generate_outline(
+        prompt="Create slides",
+        artifact_type=ArtifactType.slides,
+    ))
+    art_id = result["artifact_id"]
+    art_data = _run(orchestrator.approve_and_generate_draft(art_id))
+    rev_before = art_data["revision_head_id"]
+    ct_before = art_data["content_tree"]
+
+    # Force overflow in stored content tree
+    loaded = storage.load_artifact(art_id)
+    loaded.content_tree["slides"][1]["elements"][0]["content"] = "X" * 2500
+    storage.save_artifact(loaded)
+
+    export_result = _run(orchestrator.export_artifact(
+        art_id, ExportFormat.pptx, strict_layout=True
+    ))
+    assert export_result["status"] == "failed"
+
+    # Artifact state unchanged by failed export
+    reloaded = storage.load_artifact(art_id)
+    assert reloaded.revision_head_id == rev_before

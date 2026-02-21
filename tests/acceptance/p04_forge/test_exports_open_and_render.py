@@ -318,4 +318,92 @@ def test_17_layout_validator_detects_overflow(tmp_path) -> None:
 
     result = validate_pptx(output)
     assert result["layout_valid"] is False
-    assert len(result["layout_warnings"]) > 0
+    assert len(result["layout_errors"]) > 0
+
+
+# === Phase 3: Quality Pass Acceptance Tests ===
+
+def test_18_theme_catalog_reaches_100_plus() -> None:
+    """Theme system provides 100+ total themes."""
+    from core.studio.slides.themes import list_themes
+    themes = list_themes(include_variants=True)
+    assert len(themes) >= 100
+
+
+def test_19_chart_slide_renders_native_chart(tmp_path) -> None:
+    """Export a deck with bar chart spec produces PPTX with chart shape."""
+    from pptx import Presentation as PptxPresentation
+    from core.schemas.studio_schema import Slide, SlideElement, SlidesContentTree
+    from core.studio.slides.exporter import export_to_pptx
+    from core.studio.slides.themes import get_theme
+
+    ct = SlidesContentTree(
+        deck_title="Chart Test",
+        slides=[
+            Slide(id="s1", slide_type="chart", title="Revenue",
+                  elements=[SlideElement(id="e1", type="chart", content={
+                      "chart_type": "bar",
+                      "categories": ["Q1", "Q2", "Q3", "Q4"],
+                      "series": [{"name": "Revenue", "values": [1.2, 1.8, 2.6, 3.1]}],
+                  })],
+                  speaker_notes="Discuss revenue trends."),
+        ],
+    )
+    output = tmp_path / "chart_acceptance.pptx"
+    export_to_pptx(ct, get_theme(), output)
+
+    prs = PptxPresentation(str(output))
+    chart_slide = prs.slides[0]
+    has_chart = any(s.has_chart for s in chart_slide.shapes)
+    assert has_chart, "Chart slide should contain native chart shape"
+
+
+def test_20_notes_quality_passes_baseline() -> None:
+    """repair_speaker_notes on sample deck achieves >= 90% pass rate."""
+    from core.schemas.studio_schema import Slide, SlideElement, SlidesContentTree
+    from core.studio.slides.notes import repair_speaker_notes, score_speaker_notes
+
+    ct = SlidesContentTree(**_sample_content_tree_dict())
+    repaired = repair_speaker_notes(ct)
+
+    total = len(repaired.slides)
+    pass_count = sum(
+        1 for i, s in enumerate(repaired.slides)
+        if score_speaker_notes(s, i, total)["passes"]
+    )
+    assert pass_count / total >= 0.90
+
+
+def test_21_layout_quality_blocks_bad_export(tmp_path) -> None:
+    """Export deck with huge body under strict mode fails."""
+    import asyncio
+    from datetime import datetime, timezone
+    from uuid import uuid4
+    from core.schemas.studio_schema import Artifact, ArtifactType, ExportFormat
+    from core.studio.orchestrator import ForgeOrchestrator
+    from core.studio.storage import StudioStorage
+
+    storage = StudioStorage(base_dir=tmp_path / "studio")
+    orch = ForgeOrchestrator(storage)
+
+    art_id = str(uuid4())
+    ct = _sample_content_tree_dict()
+    # Inject overflow content
+    ct["slides"][1]["elements"][0]["content"] = "X" * 2500
+    artifact = Artifact(
+        id=art_id, type=ArtifactType.slides, title="Overflow",
+        created_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc),
+        content_tree=ct,
+    )
+    storage.save_artifact(artifact)
+
+    loop = asyncio.new_event_loop()
+    try:
+        result = loop.run_until_complete(
+            orch.export_artifact(art_id, ExportFormat.pptx, strict_layout=True)
+        )
+    finally:
+        loop.close()
+
+    assert result["status"] == "failed"
+    assert result["validator_results"]["layout_valid"] is False

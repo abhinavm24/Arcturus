@@ -133,14 +133,32 @@ def _get_type_specific_draft_schema(artifact_type: ArtifactType) -> str:
 
 - For bullet_list elements, content must be a JSON array of strings
 - Each slide must have a unique id (s1, s2, ...) and each element a unique id (e1, e2, ...)
-- speaker_notes are REQUIRED for every slide — write 2-3 sentences of presenter guidance
-- Speaker notes should provide talking points, not repeat slide content
 - Match the slide_type to the content purpose:
   * Use "title" for opening and closing slides
   * Use "content" for main narrative slides
   * Use "two_column" when comparing or contrasting
   * Use "quote" for testimonials or key insights
-  * Use "chart" when referencing data or metrics"""
+  * Use "chart" when referencing data or metrics
+
+For elements with type="chart", content MUST be a structured JSON object:
+{
+  "chart_type": "bar" | "line" | "pie" | "funnel" | "scatter",
+  "title": "Chart Title",
+  "categories": ["Label1", "Label2", ...],
+  "series": [{"name": "Series Name", "values": [1.0, 2.0, ...]}],
+  "x_label": "X Axis Label",
+  "y_label": "Y Axis Label"
+}
+For scatter charts, use "points": [{"x": 1.0, "y": 2.0}, ...] instead of categories/series.
+Do NOT use plain text strings for chart content — always use structured JSON.
+
+SPEAKER NOTES REQUIREMENTS (mandatory for every slide):
+- Write 2-4 concise sentences of presenter guidance per slide
+- Include at least one key talking point not visible on the slide
+- Include a transition sentence or audience callout
+- Do NOT repeat bullet points or body text verbatim in notes
+- Title/closing slides may have 1-2 shorter sentences
+- Target 15-60 words per slide's speaker notes"""
 
     elif artifact_type == ArtifactType.document:
         return """Generate a DocumentContentTree JSON with this exact schema:

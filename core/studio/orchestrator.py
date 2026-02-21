@@ -134,6 +134,10 @@ class ForgeOrchestrator:
             from core.studio.slides.generator import enforce_slide_count
             content_tree_model = enforce_slide_count(content_tree_model)
 
+            # Phase 3: notes quality repair pass
+            from core.studio.slides.notes import repair_speaker_notes
+            content_tree_model = repair_speaker_notes(content_tree_model)
+
         content_tree = content_tree_model.model_dump(mode="json")
 
         # Create revision
@@ -179,6 +183,7 @@ class ForgeOrchestrator:
         artifact_id: str,
         export_format: "ExportFormat",
         theme_id: Optional[str] = None,
+        strict_layout: bool = False,
     ) -> Dict[str, Any]:
         """Export an artifact to the specified format.
 
@@ -223,22 +228,34 @@ class ForgeOrchestrator:
         try:
             content_tree_model = SlidesContentTree(**artifact.content_tree)
 
+            # Non-persisting notes repair for pre-Phase3 artifacts
+            from core.studio.slides.notes import repair_speaker_notes
+            export_content_tree = repair_speaker_notes(content_tree_model)
+
             output_path = self.storage.get_export_file_path(
                 artifact_id, export_job_id, export_format.value
             )
-            export_to_pptx(content_tree_model, theme, output_path)
+            export_to_pptx(export_content_tree, theme, output_path)
 
-            validation = validate_pptx(output_path, expected_slide_count=len(content_tree_model.slides))
+            validation = validate_pptx(
+                output_path,
+                expected_slide_count=len(content_tree_model.slides),
+                content_tree=export_content_tree,
+            )
 
-            if validation["valid"]:
+            layout_ok = validation.get("layout_valid", True) or not strict_layout
+            if validation["valid"] and layout_ok:
                 export_job.status = ExportStatus.completed
                 export_job.output_uri = str(output_path)
                 export_job.file_size_bytes = output_path.stat().st_size
+                validation["strict_layout"] = strict_layout
                 export_job.validator_results = validation
                 export_job.completed_at = datetime.now(timezone.utc)
             else:
                 export_job.status = ExportStatus.failed
-                export_job.error = "; ".join(validation["errors"])
+                all_errors = validation.get("errors", []) + validation.get("layout_errors", [])
+                export_job.error = "; ".join(all_errors) if all_errors else "Quality validation failed"
+                validation["strict_layout"] = strict_layout
                 export_job.validator_results = validation
                 export_job.completed_at = datetime.now(timezone.utc)
 

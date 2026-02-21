@@ -22,7 +22,7 @@ def _run(coro):
 
 def test_export_artifact_success(monkeypatch):
     class FakeOrchestrator:
-        async def export_artifact(self, artifact_id, export_format, theme_id=None):
+        async def export_artifact(self, artifact_id, export_format, theme_id=None, strict_layout=False):
             return {"id": _UUID_JOB, "status": "completed", "format": "pptx"}
 
     monkeypatch.setattr(studio_router, "_get_orchestrator", lambda: FakeOrchestrator())
@@ -49,7 +49,7 @@ def test_export_artifact_invalid_format(monkeypatch):
 
 def test_export_artifact_not_found(monkeypatch):
     class FakeOrchestrator:
-        async def export_artifact(self, artifact_id, export_format, theme_id=None):
+        async def export_artifact(self, artifact_id, export_format, theme_id=None, strict_layout=False):
             raise ValueError(f"Artifact not found: {artifact_id}")
 
     monkeypatch.setattr(studio_router, "_get_orchestrator", lambda: FakeOrchestrator())
@@ -128,7 +128,7 @@ def test_download_export_success(monkeypatch, tmp_path):
 
 def test_list_themes():
     result = _run(studio_router.list_themes_endpoint())
-    assert len(result) == 8
+    assert len(result) == 16
     assert any(t["id"] == "corporate-blue" for t in result)
 
 
@@ -164,3 +164,40 @@ def test_get_export_job_global(monkeypatch, tmp_path):
 
     result = _run(studio_router.get_export_job_global(_UUID_JOB))
     assert result["id"] == _UUID_JOB
+
+
+# === Phase 3: Strict layout + theme variant tests ===
+
+def test_export_strict_layout_failure(monkeypatch):
+    class FakeOrchestrator:
+        async def export_artifact(self, artifact_id, export_format, theme_id=None, strict_layout=False):
+            return {"id": _UUID_JOB, "status": "failed" if strict_layout else "completed",
+                    "format": "pptx", "error": "layout violation"}
+
+    monkeypatch.setattr(studio_router, "_get_orchestrator", lambda: FakeOrchestrator())
+
+    request = studio_router.ExportArtifactRequest(format="pptx", strict_layout=True)
+    result = _run(studio_router.export_artifact(_UUID_1, request))
+    assert result["status"] == "failed"
+
+
+def test_export_strict_layout_opt_out(monkeypatch):
+    class FakeOrchestrator:
+        async def export_artifact(self, artifact_id, export_format, theme_id=None, strict_layout=False):
+            return {"id": _UUID_JOB, "status": "completed", "format": "pptx"}
+
+    monkeypatch.setattr(studio_router, "_get_orchestrator", lambda: FakeOrchestrator())
+
+    request = studio_router.ExportArtifactRequest(format="pptx", strict_layout=False)
+    result = _run(studio_router.export_artifact(_UUID_1, request))
+    assert result["status"] == "completed"
+
+
+def test_list_themes_with_variants():
+    result = _run(studio_router.list_themes_endpoint(include_variants=True))
+    assert len(result) >= 112
+
+
+def test_list_themes_filter_base_id():
+    result = _run(studio_router.list_themes_endpoint(base_id="corporate-blue"))
+    assert len(result) == 7  # 1 base + 6 variants
