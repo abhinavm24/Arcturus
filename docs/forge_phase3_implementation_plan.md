@@ -29,7 +29,7 @@ This plan is derived from:
 - Upgrade `validator.py` to v2 with blocking layout checks, chart quality checks, notes quality checks, and quality score
 - Wire notes repair into draft path and strict validator into export path in `orchestrator.py`
 - Add `strict_layout` export parameter and theme listing controls to `routers/studio.py`
-- ~81 new tests across 4 new + 5 modified test files
+- ~92 new tests across 4 new + 5 modified test files
 
 **Out of scope:**
 - New export formats (PDF/HTML/Google Slides) — Phase 4-5
@@ -179,13 +179,13 @@ Keep existing 8 theme IDs stable to avoid breaking saved artifacts that referenc
 | ID | Name | Primary | Font Heading | Description |
 |----|------|---------|-------------|-------------|
 | `finance-navy` | Finance Navy | `#0A1F44` | Garamond | Conservative theme for financial reports and investor decks |
-| `healthcare-teal` | Healthcare Teal | `#007C91` | Nunito Sans | Clean theme for healthcare and life sciences presentations |
-| `education-purple` | Education Purple | `#5C2D91` | Merriweather | Academic theme for education and research presentations |
-| `executive-charcoal` | Executive Charcoal | `#333333` | Didot | Refined theme for C-suite and board presentations |
-| `creative-coral` | Creative Coral | `#FF6F61` | Futura | Bold theme for creative agencies and design showcases |
-| `legal-burgundy` | Legal Burgundy | `#6B2737` | Baskerville | Formal theme for legal and compliance presentations |
+| `healthcare-teal` | Healthcare Teal | `#007C91` | Corbel | Clean theme for healthcare and life sciences presentations |
+| `education-purple` | Education Purple | `#5C2D91` | Constantia | Academic theme for education and research presentations |
+| `executive-charcoal` | Executive Charcoal | `#333333` | Garamond | Refined theme for C-suite and board presentations |
+| `creative-coral` | Creative Coral | `#FF6F61` | Century Gothic | Bold theme for creative agencies and design showcases |
+| `legal-burgundy` | Legal Burgundy | `#6B2737` | Book Antiqua | Formal theme for legal and compliance presentations |
 | `product-indigo` | Product Indigo | `#3F51B5` | Inter | Modern theme for product launches and roadmap decks |
-| `sunset-amber` | Sunset Amber | `#FF8F00` | Josefin Sans | Warm theme for lifestyle and community presentations |
+| `sunset-amber` | Sunset Amber | `#FF8F00` | Trebuchet MS | Warm theme for lifestyle and community presentations |
 
 Each new theme follows the same `_register(SlideTheme(...))` pattern as the existing 8.
 
@@ -222,12 +222,16 @@ def generate_theme_variant(base_id: str, variant_seed: int) -> SlideTheme:
 _FONT_PAIRS = [
     ("Calibri", "Calibri Light"),
     ("Arial", "Arial"),
-    ("Georgia", "Lato"),
-    ("Roboto", "Roboto Light"),
-    ("Poppins", "Nunito"),
-    ("Montserrat", "Open Sans"),
+    ("Georgia", "Verdana"),
+    ("Cambria", "Corbel"),
+    ("Garamond", "Trebuchet MS"),
+    ("Constantia", "Candara"),
+    ("Century Gothic", "Century Gothic"),
+    ("Book Antiqua", "Tahoma"),
 ]
 ```
+
+> **Font safety note:** All font pairs use fonts bundled with Microsoft Office (Windows + macOS). The Phase 2 pairs included Google-only fonts (Lato, Roboto, Poppins, Nunito, Open Sans, Montserrat) that would fall back to system defaults on machines without Google Fonts installed. The updated pairs ensure deterministic rendering across all target environments.
 
 **Variant color derivation rules:**
 
@@ -445,19 +449,27 @@ Update `_set_slide_background()` to accept the full theme object and apply gradi
 
 ```python
 def _set_slide_background(slide, theme):
-    """Set slide background — supports solid and gradient fills."""
+    """Set slide background — supports solid and gradient fills.
+
+    Gradient fill is wrapped in try/except because python-pptx gradient
+    support can be inconsistent across viewers (PowerPoint vs Keynote vs
+    LibreOffice). Falls back to solid fill on any error.
+    """
     bg_hex = theme.colors.background.lstrip("#")
     if getattr(theme, "background_style", None) == "gradient":
-        primary_hex = theme.colors.primary.lstrip("#")
-        fill = slide.background.fill
-        fill.gradient()
-        fill.gradient_stops[0].color.rgb = RGBColor.from_string(bg_hex)
-        fill.gradient_stops[1].color.rgb = RGBColor.from_string(primary_hex)
-        fill.gradient_angle = 270  # Top to bottom
-    else:
-        fill = slide.background.fill
-        fill.solid()
-        fill.fore_color.rgb = RGBColor.from_string(bg_hex)
+        try:
+            primary_hex = theme.colors.primary.lstrip("#")
+            fill = slide.background.fill
+            fill.gradient()
+            fill.gradient_stops[0].color.rgb = RGBColor.from_string(bg_hex)
+            fill.gradient_stops[1].color.rgb = RGBColor.from_string(primary_hex)
+            fill.gradient_angle = 270  # Top to bottom
+            return
+        except Exception:
+            pass  # Fall through to solid fill
+    fill = slide.background.fill
+    fill.solid()
+    fill.fore_color.rgb = RGBColor.from_string(bg_hex)
 ```
 
 All existing renderer functions that call `_set_slide_background()` must be updated to pass the full theme object instead of just `theme.colors.background`.
@@ -494,12 +506,8 @@ def _add_chart(slide, spec: "ChartSpec", theme: "SlideTheme") -> bool:
         chart = chart_frame.chart
         chart.has_legend = len(spec.series) > 1 or spec.chart_type.value == "pie"
 
-        # Minimal theme application
-        if chart.chart_title:
-            chart.chart_title.text_frame.paragraphs[0].font.color.rgb = RGBColor.from_string(
-                theme.colors.primary.lstrip("#")
-            )
-        # Apply theme accent as first series fill (when accessible)
+        # Apply full theme styling
+        _style_chart(chart, spec, theme)
         return True
     except Exception:
         return False
@@ -515,7 +523,55 @@ _CHART_TYPE_MAP = {
 # Funnel uses BAR_CLUSTERED (horizontal) for visual distinction.
 ```
 
-### 5.5 Placement Rules
+### 5.5 Chart Styling
+
+Apply full theme styling to native chart objects:
+
+```python
+def _build_chart_palette(theme: "SlideTheme") -> list[str]:
+    """Build a 6-color chart palette from theme colors.
+
+    Returns hex strings: [accent, primary, secondary,
+                          tinted_accent, tinted_primary, tinted_secondary]
+
+    Tints are 40% blends toward white (#FFFFFF).
+    """
+
+
+def _style_chart(chart, spec: "ChartSpec", theme: "SlideTheme") -> None:
+    """Apply theme styling to a python-pptx chart object.
+
+    Styling applied (all ops wrapped in try/except for chart type safety):
+    - Plot area: transparent fill (no background color)
+    - Chart frame border: removed for clean look
+    - Series fill: assign colors from _build_chart_palette() to each series/point
+    - Axis labels: theme.font_body at body_small_size (16pt), theme.colors.text_light (muted)
+    - Gridlines: major gridlines on value axis only in text_light color; remove category axis gridlines
+    - Legend: show for multi-series or pie charts; compact font at code_size (14pt)
+    - Chart title: theme.font_heading, bold, primary color
+    """
+    # De-PowerPointing: transparent plot area + no chart border
+    try:
+        chart.chart_style = 2  # Minimal style
+        plot = chart.plots[0]
+        plot.format.fill.background()  # Transparent plot area
+    except Exception:
+        pass
+    try:
+        chart.element.find(
+            './/{http://schemas.openxmlformats.org/drawingml/2006/chart}spPr'
+        )  # Remove chart frame border via chart_frame if accessible
+        if hasattr(chart, 'chart_style'):
+            chart.chart_format.line.fill.background()
+    except Exception:
+        pass
+```
+
+The `_build_chart_palette()` function generates 6 distinct colors by taking the 3 theme colors (accent, primary, secondary) and creating 3 additional tinted versions blended 40% toward white. This ensures sufficient visual distinction for multi-series charts while staying on-theme.
+
+**Chart "de-PowerPointing" details:** Axis label color uses `theme.colors.text_light` (not `text`) for muted, professional appearance. Gridline color also uses `text_light` to avoid harsh black lines. The plot area fill is set to transparent (no background) and the chart frame border is removed, so charts blend cleanly into the slide background.
+
+### 5.6 Placement Rules
 
 | Slide condition | Placement rule |
 |-----------------|----------------|
@@ -524,11 +580,250 @@ _CHART_TYPE_MAP = {
 | Any slide with chart element + body | Chart in primary zone, body below |
 | Multiple chart elements | Render first valid chart, ignore extras |
 
-### 5.6 Safety
+### 5.7 Safety
 
 - `_add_chart()` wraps all chart operations in try/except and returns `False` on failure
 - Exporter never crashes on malformed chart payloads — always falls back to text placeholder
 - Invalid chart triggers validator warning (not exporter crash)
+
+---
+
+## 5A. Visual Design System
+
+**File:** `core/studio/slides/exporter.py`
+
+Phase 2's exporter produces functional slides but with no visual polish — hardcoded font sizes across 10 renderers, no text frame margins, no line spacing control, no card-based layouts, and no slide chrome (accent bars, footers, slide numbers). This section introduces a centralized design token system and visual helpers that elevate slide output from "functional" to "polished."
+
+### 5A.1 Design Tokens
+
+Add a centralized `_DESIGN_TOKENS` dict to `exporter.py` that replaces all hardcoded `Pt()` values:
+
+```python
+_DESIGN_TOKENS = {
+    # Typography scale
+    "title_size": Pt(44),
+    "heading_size": Pt(32),
+    "subheading_size": Pt(24),
+    "body_size": Pt(18),
+    "body_small_size": Pt(16),
+    "code_size": Pt(14),
+    "footer_size": Pt(10),
+    "quote_size": Pt(36),
+    "attribution_size": Pt(20),
+
+    # Text frame margins
+    "margin_left": Inches(0.15),
+    "margin_right": Inches(0.15),
+    "margin_top": Inches(0.08),
+    "margin_bottom": Inches(0.08),
+
+    # Paragraph spacing
+    "line_spacing": 1.15,          # Multiplier (Emu-based Sp in python-pptx)
+    "para_space_after": Pt(6),     # General paragraph spacing
+    "bullet_space_after": Pt(8),   # Bullet item spacing
+
+    # Bullet formatting
+    "bullet_indent": Inches(0.25),    # Left indent for bullet paragraphs
+    "bullet_hanging": Inches(0.20),   # Hanging indent (negative first_line_indent)
+
+    # Caption tokens
+    "caption_size": Pt(14),           # Smaller than body for captions below charts/images
+    "caption_color_key": "text_light",  # Resolve from theme at render time
+
+    # Slide chrome
+    "accent_bar_height": Inches(0.04),
+    "accent_bar_top": Inches(7.1),
+    "footer_height": Inches(0.25),
+    "footer_top": Inches(7.2),
+}
+```
+
+**Font scale compensation** — Serif fonts render visually smaller than sans-serif at identical point sizes. A `_FONT_SCALE` dict applies per-font multipliers to heading sizes:
+
+```python
+_FONT_SCALE = {
+    "Garamond": 1.12,       # +12% for serif headings
+    "Book Antiqua": 1.10,
+    "Georgia": 1.08,
+    "Constantia": 1.08,
+}
+# Usage in _add_text_box(): font_size = token_size * _FONT_SCALE.get(font_name, 1.0)
+```
+
+Applied only at the point of `_add_text_box()` call for heading-level text. No schema changes needed — this is a ~10-line rendering concern within the exporter.
+
+All 10 renderer functions (`_render_title`, `_render_section_break`, `_render_content`, `_render_bullets`, `_render_comparison`, `_render_quote`, `_render_chart`, `_render_team`, `_render_timeline`, `_render_closing`) are refactored to use token keys instead of inline `Pt()` values. For example:
+
+```python
+# Before (Phase 2):
+font_size=Pt(44)
+
+# After (Phase 3):
+font_size=_DESIGN_TOKENS["title_size"]
+```
+
+### 5A.2 Text Frame Margins & Line Spacing
+
+Update `_add_text_box()` and `_add_bullet_list()` helpers to apply margins and spacing from tokens:
+
+```python
+def _add_text_box(slide, text, *, left, top, width, height,
+                  font_name, font_size, font_color, bold=False,
+                  alignment=PP_ALIGN.LEFT):
+    """Add a text box with design token margins and line spacing."""
+    txBox = slide.shapes.add_textbox(left, top, width, height)
+    tf = txBox.text_frame
+    tf.word_wrap = True
+
+    # NEW: Apply margins from design tokens
+    tf.margin_left = _DESIGN_TOKENS["margin_left"]
+    tf.margin_right = _DESIGN_TOKENS["margin_right"]
+    tf.margin_top = _DESIGN_TOKENS["margin_top"]
+    tf.margin_bottom = _DESIGN_TOKENS["margin_bottom"]
+
+    p = tf.paragraphs[0]
+    p.text = text
+    p.alignment = alignment
+
+    # NEW: Apply line spacing
+    p.line_spacing = _DESIGN_TOKENS["line_spacing"]
+    p.space_after = _DESIGN_TOKENS["para_space_after"]
+
+    # ... existing font setup ...
+```
+
+Similarly, `_add_bullet_list()` applies `bullet_space_after` from tokens:
+
+```python
+# In _add_bullet_list(), for each paragraph:
+p.space_after = _DESIGN_TOKENS["bullet_space_after"]
+p.line_spacing = _DESIGN_TOKENS["line_spacing"]
+p.paragraph_format.left_indent = _DESIGN_TOKENS["bullet_indent"]
+p.paragraph_format.first_line_indent = -_DESIGN_TOKENS["bullet_hanging"]
+```
+
+### 5A.3 Slide Chrome
+
+New helper function that adds thin accent bar and slide number to content slides:
+
+```python
+from pptx.enum.shapes import MSO_SHAPE
+
+def _add_slide_chrome(slide, theme, slide_number, total_slides):
+    """Add accent bar and slide number to a slide.
+
+    Components:
+    - Thin accent bar: MSO_SHAPE.RECTANGLE at accent_bar_top, full slide width,
+      accent_bar_height, filled with theme.colors.accent
+    - Slide number: text box in bottom-right corner, footer_size font,
+      theme.colors.text_light, format "3 / 10"
+
+    Skip conditions:
+    - First slide (title slide) — no chrome
+    - Last slide (closing slide) — no chrome
+    """
+    # Accent bar — full slide width
+    bar = slide.shapes.add_shape(
+        MSO_SHAPE.RECTANGLE,
+        Inches(0), _DESIGN_TOKENS["accent_bar_top"],
+        SLIDE_WIDTH, _DESIGN_TOKENS["accent_bar_height"],
+    )
+    bar.fill.solid()
+    bar.fill.fore_color.rgb = RGBColor.from_string(
+        theme.colors.accent.lstrip("#")
+    )
+    bar.line.fill.background()  # No border
+
+    # Slide number — right-aligned relative to slide width
+    num_box = slide.shapes.add_textbox(
+        SLIDE_WIDTH - MARGIN_RIGHT - Inches(1.2), _DESIGN_TOKENS["footer_top"],
+        Inches(1.2), _DESIGN_TOKENS["footer_height"],
+    )
+    tf = num_box.text_frame
+    p = tf.paragraphs[0]
+    p.text = f"{slide_number} / {total_slides}"
+    p.alignment = PP_ALIGN.RIGHT
+    p.font.size = _DESIGN_TOKENS["footer_size"]
+    p.font.color.rgb = RGBColor.from_string(
+        theme.colors.text_light.lstrip("#")
+    )
+```
+
+Integration point — called in `export_to_pptx()` after each renderer:
+
+```python
+for i, slide_data in enumerate(content_tree.slides):
+    slide = prs.slides.add_slide(blank_layout)
+    renderer = _RENDERERS.get(slide_data.slide_type, _render_content)
+    renderer(slide, slide_data, theme)
+
+    # NEW: Add slide chrome (skip first and last slides)
+    if 0 < i < len(content_tree.slides) - 1:
+        _add_slide_chrome(slide, theme, i + 1, len(content_tree.slides))
+```
+
+### 5A.4 Card-Based Layouts
+
+New helper for card backgrounds with accent strip:
+
+```python
+def _add_card(slide, *, left, top, width, height, theme, color_key="primary"):
+    """Add a rectangle card with subtle border and left accent strip.
+
+    Components:
+    - Rectangle (MSO_SHAPE.RECTANGLE) filled with 10% theme color
+      (color_key) blended toward background, with a 1pt border in
+      theme text_light color at 30% opacity for a clean modern look
+    - Left accent strip: 0.06" wide rectangle, filled with
+      theme.colors.accent (solid, no transparency)
+
+    Args:
+        color_key: "primary" or "secondary" — controls card fill tint
+    """
+    # Card background
+    card = slide.shapes.add_shape(
+        MSO_SHAPE.RECTANGLE, left, top, width, height,
+    )
+    # 10% tint of theme color toward background
+    base_color = getattr(theme.colors, color_key)
+    card_fill = _blend_color(base_color, theme.colors.background, 0.10)
+    card.fill.solid()
+    card.fill.fore_color.rgb = RGBColor.from_string(card_fill.lstrip("#"))
+    # Subtle border: 1pt in text_light color
+    card.line.width = Pt(1)
+    card.line.color.rgb = RGBColor.from_string(
+        _blend_color(theme.colors.text_light, theme.colors.background, 0.30).lstrip("#")
+    )
+
+    # Left accent strip
+    strip = slide.shapes.add_shape(
+        MSO_SHAPE.RECTANGLE,
+        left, top, Inches(0.06), height,
+    )
+    strip.fill.solid()
+    strip.fill.fore_color.rgb = RGBColor.from_string(
+        theme.colors.accent.lstrip("#")
+    )
+    strip.line.fill.background()
+
+    return card
+```
+
+Updated renderers that use cards:
+
+- **`_render_content()`**: Body text and bullet lists wrapped in a card. Text content positioned inside with margin offsets accounting for the accent strip width.
+- **`_render_comparison()`**: Two cards side by side with distinct fill colors (`color_key="primary"` for left, `color_key="secondary"` for right).
+
+Supporting utility:
+
+```python
+def _blend_color(color_hex: str, bg_hex: str, ratio: float) -> str:
+    """Blend color_hex toward bg_hex by ratio (0.0 = all bg, 1.0 = all color).
+
+    Used for card fills: 10% theme color on background.
+    Returns hex string with '#' prefix.
+    """
+```
 
 ---
 
@@ -650,6 +945,18 @@ Phase 2 validator performs structural open-check + advisory text density warning
 **Layer 4 — Notes quality (advisory):**
 - Calls `score_speaker_notes()` from `notes.py` for each slide
 - Deck-level pass: >= 90% of slides meet quality threshold AND no slide has empty notes
+
+**Layer 5 — Content heuristics (advisory):**
+
+When `content_tree` is provided, apply advisory content checks that catch layout problems before they manifest as visual issues:
+
+| Check | Condition | Result |
+|-------|-----------|--------|
+| Title length | Slide title `> 60 chars` | `layout_warning`: "Slide N: title exceeds 60 chars (K chars) — may overflow or require small font" |
+| Bullet count | Bullet list with `> 7 items` | `layout_warning`: "Slide N: bullet list has K items — recommend ≤ 7 for readability" |
+| Sparse content | Non-title slide with total text `< 20 chars` | `layout_warning`: "Slide N: sparse content (K chars) — slide may appear empty" |
+
+These are advisory only (not blocking). They contribute to `layout_warnings` and reduce the quality score by 5 points each, capped at 20 per the existing formula in Section 7.3.
 
 ### 7.2 Updated Function Signature
 
@@ -966,7 +1273,7 @@ Tests are organized into **unit tests** (model/logic correctness), **component t
 | `test_repair_preserves_good_notes` | Good notes → unchanged |
 | `test_repair_returns_new_tree` | Input content tree not mutated |
 
-### `tests/test_studio_slides_validator.py` — 15 tests (NEW)
+### `tests/test_studio_slides_validator.py` — 18 tests (NEW)
 
 | Test | What It Verifies |
 |------|-----------------|
@@ -985,6 +1292,9 @@ Tests are organized into **unit tests** (model/logic correctness), **component t
 | `test_quality_score_degraded` | Layout warnings present → `quality_score` < 90 |
 | `test_small_font_warning` | Text shape with 8pt font → entry in `layout_warnings` |
 | `test_result_has_all_keys` | Result dict contains all 10 expected keys |
+| `test_advisory_long_title_warning` | Slide with title > 60 chars + `content_tree` → `layout_warning` about title length |
+| `test_advisory_excessive_bullets_warning` | Slide with 9-item bullet list + `content_tree` → `layout_warning` about bullet count |
+| `test_advisory_sparse_content_warning` | Non-title slide with < 20 chars total + `content_tree` → `layout_warning` about sparse content |
 
 ### `tests/test_studio_slides_themes.py` — +6 tests (MODIFY)
 
@@ -997,11 +1307,11 @@ Tests are organized into **unit tests** (model/logic correctness), **component t
 | `test_list_themes_include_variants_returns_more` | `list_themes(include_variants=True)` > `list_themes()` |
 | `test_variant_metadata_roundtrip` | `SlideTheme` with `base_theme_id`/`variant_seed`/`background_style` round-trips |
 
-### `tests/test_studio_slides_exporter.py` — +10 tests (MODIFY)
+### `tests/test_studio_slides_exporter.py` — +18 tests (MODIFY)
 
 | Test | What It Verifies |
 |------|-----------------|
-| `test_export_chart_bar_native` | Bar chart spec → PPTX contains chart shape (not just text) |
+| `test_export_chart_bar_native` | Bar chart spec → PPTX contains chart shape at `CHART_LEFT/TOP/WIDTH/HEIGHT` constants |
 | `test_export_chart_line_native` | Line chart spec → PPTX contains chart shape |
 | `test_export_chart_pie_native` | Pie chart spec → PPTX contains chart shape |
 | `test_export_chart_scatter_native` | Scatter spec with points → PPTX contains chart shape |
@@ -1011,6 +1321,14 @@ Tests are organized into **unit tests** (model/logic correctness), **component t
 | `test_export_chart_pie_multi_series` | Pie with 3 series → only first series rendered, no crash |
 | `test_export_gradient_background` | Theme with gradient background_style → PPTX slide has gradient fill |
 | `test_export_with_variant_theme` | Variant theme ID → valid PPTX with variant colors applied |
+| `test_export_text_frame_has_margins` | Text box shape → `tf.margin_left/right/top/bottom` match design tokens |
+| `test_export_content_slide_has_card_shape` | Content slide → contains exactly 1 `MSO_SHAPE.RECTANGLE` card shape (plus accent strip) |
+| `test_export_comparison_has_two_cards` | Comparison slide → contains two card shapes with distinct fill colors |
+| `test_export_body_slide_has_accent_bar` | Non-title content slide → contains thin rectangle with width == `SLIDE_WIDTH` at accent_bar_top, within footer zone bounds |
+| `test_export_body_slide_has_slide_number` | Non-title content slide → contains text box with "N / M" slide number format |
+| `test_export_title_slide_no_chrome` | First (title) slide → no accent bar or slide number shapes |
+| `test_export_chart_has_styled_series` | Chart with theme → series fill colors match `_build_chart_palette()` output |
+| `test_export_chart_has_gridlines` | Chart with theme → value axis has major gridlines, category axis does not |
 
 ### `tests/test_studio_export_router.py` — +4 tests (MODIFY)
 
@@ -1050,15 +1368,15 @@ Continue from existing `test_13`. Add:
 | `test_studio_slides_theme_variants.py` (NEW) | 14 | Unit |
 | `test_studio_slides_charts.py` (NEW) | 14 | Unit |
 | `test_studio_slides_notes.py` (NEW) | 10 | Unit |
-| `test_studio_slides_validator.py` (NEW) | 15 | Unit |
+| `test_studio_slides_validator.py` (NEW) | 18 | Unit |
 | `test_studio_slides_themes.py` (MODIFY) | +6 | Unit |
-| `test_studio_slides_exporter.py` (MODIFY) | +10 | Component |
+| `test_studio_slides_exporter.py` (MODIFY) | +18 | Component |
 | `test_studio_export_router.py` (MODIFY) | +4 | Router |
 | `test_exports_open_and_render.py` (MODIFY) | +4 | Acceptance |
 | `test_forge_research_to_slides.py` (MODIFY) | +4 | Integration |
-| **Total new tests** | **81** | |
+| **Total new tests** | **92** | |
 | Existing Phase 1+2 tests (unchanged) | 143+ | |
-| **Combined total** | **224+** | |
+| **Combined total** | **235+** | |
 
 ### Gate Commands
 
@@ -1080,35 +1398,41 @@ scripts/test_all.sh quick
 
 ## 13. Day-by-Day Execution Sequence
 
-### Day 9: Theme Bundles + Chart and Notes Foundations
+### Day 9: Theme Bundles + Chart/Notes Foundations + Design Tokens
 
 1. Update `core/schemas/studio_schema.py` — add `ChartType`, `ChartSeries`, `ScatterPoint`, `ChartSpec` models; add `base_theme_id`, `variant_seed`, `background_style` fields to `SlideTheme`
-2. Expand `core/studio/slides/themes.py` — add 8 new curated base themes, implement `generate_theme_variant()` with HSL rotation + contrast validation, update `list_themes()`/`get_theme_ids()` signatures
+2. Expand `core/studio/slides/themes.py` — add 8 new curated base themes (with safe font replacements: Didot→Garamond, Futura→Century Gothic, Baskerville→Book Antiqua, Josefin Sans→Trebuchet MS, Nunito Sans→Corbel, Merriweather→Constantia), implement `generate_theme_variant()` with HSL rotation + contrast validation, update `list_themes()`/`get_theme_ids()` signatures, replace variant `_FONT_PAIRS` with all-Office-safe pairs
 3. Create `core/studio/slides/charts.py` — `parse_chart_spec()`, `normalize_chart_spec()`, `infer_chart_type()`
 4. Create `core/studio/slides/notes.py` — `score_speaker_notes()`, `repair_speaker_notes()`
 5. Update `core/studio/prompts.py` — chart JSON schema guidance in draft prompt, stronger notes rubric
-6. Write tests:
+6. Add `_DESIGN_TOKENS` dict to `core/studio/slides/exporter.py` — centralized typography scale, text frame margins, paragraph spacing, and slide chrome dimensions
+7. Refactor all 10 renderer functions in exporter to use `_DESIGN_TOKENS` keys instead of hardcoded `Pt()` values
+8. Update `_add_text_box()` and `_add_bullet_list()` helpers — apply `tf.margin_left/right/top/bottom` and `p.line_spacing`/`p.space_after` from design tokens
+9. Write tests:
    - `tests/test_studio_slides_theme_variants.py` (14 tests)
    - `tests/test_studio_slides_charts.py` (14 tests)
    - `tests/test_studio_slides_notes.py` (10 tests)
    - Update `tests/test_studio_slides_themes.py` (+6 tests)
-7. Run targeted suite:
+10. Run targeted suite:
 
 ```bash
 uv run pytest tests/test_studio_slides_theme_variants.py tests/test_studio_slides_charts.py tests/test_studio_slides_notes.py tests/test_studio_slides_themes.py -q
 ```
 
-**Day 9 exit gate:** All 44 new tests pass (14 + 14 + 10 + 6). Schema backward compatibility verified (existing schema tests still pass). Theme catalog returns 112+ with `include_variants=True`.
+**Day 9 exit gate:** All 44 new tests pass (14 + 14 + 10 + 6). Schema backward compatibility verified (existing schema tests still pass). Theme catalog returns 112+ with `include_variants=True`. Design tokens centralized and all renderers refactored.
 
-### Day 10: Exporter + Validator + Pipeline Enforcement
+### Day 10: Visual Chrome + Charts + Validator + Pipeline Enforcement
 
-1. Update `core/studio/slides/exporter.py` — add chart layout constants, `_add_chart()` helper, replace `_render_chart()` with native chart rendering
-2. Upgrade `core/studio/slides/validator.py` — add `layout_errors`, out-of-bounds detection, chart quality check, notes quality check, quality score
-3. Update `core/studio/orchestrator.py` — add `repair_speaker_notes()` in draft path after `enforce_slide_count()`, add `strict_layout` parameter to `export_artifact()`, enforce blocking layout validation in export status decision
-4. Update `routers/studio.py` — add `strict_layout` to `ExportArtifactRequest`, add `include_variants`/`base_id`/`limit` params to theme listing endpoint
-5. Write tests:
-   - `tests/test_studio_slides_validator.py` (15 tests)
-   - Update `tests/test_studio_slides_exporter.py` (+10 tests)
+1. Add `_add_slide_chrome()` to `core/studio/slides/exporter.py` — thin accent bar (MSO_SHAPE.RECTANGLE, accent color) and slide number (bottom-right, "N / M" format); integrate into `export_to_pptx()` loop (skip first/last slides)
+2. Add `_add_card()` and `_blend_color()` to exporter — rectangle card with subtle 1pt border and left accent strip; update `_render_content()` to wrap body/bullets in card, update `_render_comparison()` for two-card layout with primary/secondary color keys
+3. Add `_style_chart()` and `_build_chart_palette()` to exporter — 6-color palette from theme colors, series fill, axis labels, gridlines, legend, chart title styling; integrate into `_add_chart()` (extends chart rendering from Section 5.4)
+4. Add chart layout constants, complete `_add_chart()` helper, replace `_render_chart()` with native chart rendering
+5. Upgrade `core/studio/slides/validator.py` — add `layout_errors`, out-of-bounds detection, chart quality check, notes quality check, quality score, and 3 advisory content heuristics (title length > 60 chars, bullet count > 7, sparse content < 20 chars) using `content_tree` parameter
+6. Update `core/studio/orchestrator.py` — add `repair_speaker_notes()` in draft path after `enforce_slide_count()`, add `strict_layout` parameter to `export_artifact()`, enforce blocking layout validation in export status decision
+7. Update `routers/studio.py` — add `strict_layout` to `ExportArtifactRequest`, add `include_variants`/`base_id`/`limit` params to theme listing endpoint
+8. Write tests:
+   - `tests/test_studio_slides_validator.py` (18 tests, including 3 advisory content heuristic tests)
+   - Update `tests/test_studio_slides_exporter.py` (+18 tests, including 8 visual design tests)
    - Update `tests/test_studio_export_router.py` (+4 tests)
    - Update acceptance tests (+4 tests: test_18 through test_21)
    - Update integration tests (+4 tests: test_14 through test_17)
@@ -1151,7 +1475,7 @@ curl -o output.pptx http://localhost:8000/api/studio/{artifact_id}/exports/{expo
 open output.pptx
 ```
 
-**Day 10 exit gate:** All 81 new tests pass. Full pipeline works end-to-end. Strict quality validation active. PPTX with charts opens in viewer. Baseline regression green.
+**Day 10 exit gate:** All 92 new tests pass. Full pipeline works end-to-end. Strict quality validation active. PPTX with charts opens in viewer. Slides have card-based layouts, accent bars, slide numbers, and styled charts. Baseline regression green.
 
 ---
 
@@ -1169,8 +1493,14 @@ open output.pptx
 | 8 | Layout violations block export under strict mode | `test_21_layout_quality_blocks_bad_export` |
 | 9 | Export lifecycle records detailed validator results (10 keys) | `test_result_has_all_keys` + router tests |
 | 10 | Artifact/revision state remains consistent on failed export | `test_17_quality_rejection_preserves_artifact_state` |
-| 11 | Acceptance and integration gate files remain green | `pytest tests/acceptance/p04_forge/ tests/integration/test_forge_research_to_slides.py -v` |
-| 12 | No regression in baseline suite | `scripts/test_all.sh quick` |
+| 11 | Content slides have rectangle card layouts with subtle border and accent strips | `test_export_content_slide_has_card_shape` |
+| 12 | Non-title slides have accent bar and slide number chrome | `test_export_body_slide_has_accent_bar` + `test_export_body_slide_has_slide_number` |
+| 13 | Text frames have margins and line spacing from design tokens | `test_export_text_frame_has_margins` |
+| 14 | Charts have themed series colors, gridlines, and styled legends | `test_export_chart_has_styled_series` + `test_export_chart_has_gridlines` |
+| 15 | Advisory content heuristics flag long titles, excess bullets, sparse slides | `test_advisory_long_title_warning` + `test_advisory_excessive_bullets_warning` + `test_advisory_sparse_content_warning` |
+| 16 | All base theme fonts are Office-safe (no Google-only fonts) | `test_variant_fonts_from_allowlist` + manual font list audit |
+| 17 | Acceptance and integration gate files remain green | `pytest tests/acceptance/p04_forge/ tests/integration/test_forge_research_to_slides.py -v` |
+| 18 | No regression in baseline suite | `scripts/test_all.sh quick` |
 
 ---
 
@@ -1188,7 +1518,20 @@ open output.pptx
 
 ---
 
-## 16. Phase 4+ Extension Hooks
+## 16. Deferred Items
+
+The following visual enhancements were considered but deferred from Phase 3. They can be revisited in later phases if the base visual system proves stable.
+
+| Item | Reason Deferred |
+|------|-----------------|
+| `subtle_pattern` backgrounds | High-effort programmatic geometry (repeating shapes, noise textures) with low perceived value compared to cards/chrome. The `background_style` field already supports `"subtle_pattern"` in the schema, but the exporter only implements `"solid"` and `"gradient"` for Phase 3. |
+| Shape-based timeline renderer | Complex node positioning (circles, connecting lines, milestone labels) for one slide type (`timeline`). Current text-based timeline is functional. |
+| Team card grid layout | Dynamic grid math (2x2, 2x3, 3x3) based on member count, with photo placeholder shapes. Requires per-count layout tables. |
+| Layout variants per slide type | Offering 2-3 layout options per slide type (e.g., left-image vs. right-image for content slides) introduces multiplicative complexity. Stabilize one polished layout per type first. |
+
+---
+
+## 17. Phase 4+ Extension Hooks
 
 Phase 3 leaves clean extension points for later phases:
 
