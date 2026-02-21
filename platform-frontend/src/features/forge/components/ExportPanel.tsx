@@ -143,9 +143,22 @@ export function ExportPanel({ artifact }: { artifact: any }) {
         startExport(artifact.id, themeId);
     };
 
-    const handleDownload = (job: any) => {
+    const handleDownload = async (job: any) => {
         const url = api.getExportDownloadUrl(artifact.id, job.id);
-        window.open(url, '_blank');
+        try {
+            const resp = await fetch(url);
+            const blob = await resp.blob();
+            const blobUrl = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = blobUrl;
+            a.download = `${artifact.title || 'slides'}.pptx`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(blobUrl);
+        } catch (err) {
+            console.error('Download failed:', err);
+        }
     };
 
     const formatSize = (bytes: number | null | undefined) => {
