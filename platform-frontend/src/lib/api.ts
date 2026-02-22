@@ -171,10 +171,11 @@ export const api = {
         return res.data;
     },
 
-    exportArtifact: async (id: string, format: string, themeId?: string, strictLayout?: boolean): Promise<any> => {
-        const payload: { format: string; theme_id?: string; strict_layout?: boolean } = { format };
+    exportArtifact: async (id: string, format: string, themeId?: string, strictLayout?: boolean, generateImages?: boolean): Promise<any> => {
+        const payload: { format: string; theme_id?: string; strict_layout?: boolean; generate_images?: boolean } = { format };
         if (themeId) payload.theme_id = themeId;
         if (strictLayout !== undefined) payload.strict_layout = strictLayout;
+        if (generateImages) payload.generate_images = true;
         const res = await axios.post(`${API_BASE}/studio/${id}/export`, payload);
         return res.data;
     },

@@ -31,6 +31,7 @@ class ExportArtifactRequest(BaseModel):
     format: str = "pptx"
     theme_id: Optional[str] = None
     strict_layout: bool = False
+    generate_images: bool = False
 
 
 # === Validators ===
@@ -234,6 +235,7 @@ async def export_artifact(artifact_id: str, request: ExportArtifactRequest):
             export_format=export_format,
             theme_id=request.theme_id,
             strict_layout=request.strict_layout,
+            generate_images=request.generate_images,
         )
         return result
     except HTTPException:

@@ -203,12 +203,16 @@ class ModelManager:
 
     async def _wait_for_rate_limit(self):
         """Enforce ~15 RPM limit for Gemini (4s interval)"""
+        await ModelManager._wait_for_rate_limit_static()
+
+    @staticmethod
+    async def _wait_for_rate_limit_static():
+        """Class-level rate limiter usable without a ModelManager instance."""
         async with ModelManager._lock:
             now = time.time()
             elapsed = now - ModelManager._last_call
-            if elapsed < 4.5: # 4.5s buffer for safety
+            if elapsed < 4.5:  # 4.5s buffer for safety
                 sleep_time = 4.5 - elapsed
-                # print(f"[Rate Limit] Sleeping for {sleep_time:.2f}s...")
                 await asyncio.sleep(sleep_time)
             ModelManager._last_call = time.time()
 

@@ -437,11 +437,13 @@ interface StudioSlice {
     exportJobs: any[];
     activeExportJobId: string | null;
     exportPollingInterval: ReturnType<typeof setInterval> | null;
+    autoDownloadJobId: { jobId: string; artifactId: string } | null;
     fetchThemes: (params?: { include_variants?: boolean; base_id?: string; limit?: number }) => Promise<void>;
-    startExport: (artifactId: string, themeId?: string, strictLayout?: boolean) => Promise<void>;
+    startExport: (artifactId: string, themeId?: string, strictLayout?: boolean, generateImages?: boolean) => Promise<void>;
     fetchExportJobs: (artifactId: string) => Promise<void>;
     pollExportJob: (artifactId: string, jobId: string) => void;
     stopExportPolling: () => void;
+    clearAutoDownload: () => void;
 }
 
 interface AppState extends RunSlice, GraphSlice, WorkspaceSlice, ReplaySlice, SettingsSlice, RagViewerSlice, NotesSlice, IdeSlice, RemmeSlice, ExplorerSlice, AppsSlice, AgentTestSlice, NewsSlice, ChatSlice, ReviewSlice, InboxSlice, SchedulerSlice, EventBusSlice, StudioSlice { }
@@ -2188,6 +2190,7 @@ export const useAppStore = create<AppState>()(
                     exportJobs: [],
                     activeExportJobId: null,
                     isExporting: false,
+                    autoDownloadJobId: null,
                 });
                 if (id) get().loadArtifact(id);
             },
@@ -2254,6 +2257,7 @@ export const useAppStore = create<AppState>()(
             exportJobs: [],
             activeExportJobId: null,
             exportPollingInterval: null,
+            autoDownloadJobId: null,
 
             fetchThemes: async (params) => {
                 if (!params && get().studioThemes.length > 0) return;
@@ -2265,12 +2269,15 @@ export const useAppStore = create<AppState>()(
                 }
             },
 
-            startExport: async (artifactId, themeId, strictLayout) => {
+            startExport: async (artifactId, themeId, strictLayout, generateImages) => {
                 set({ isExporting: true });
                 try {
-                    const job = await api.exportArtifact(artifactId, 'pptx', themeId, strictLayout);
+                    const job = await api.exportArtifact(artifactId, 'pptx', themeId, strictLayout, generateImages);
                     const jobId = job.job_id || job.id;
-                    set({ activeExportJobId: jobId });
+                    set({
+                        activeExportJobId: jobId,
+                        exportJobs: [job, ...get().exportJobs],
+                    });
                     get().pollExportJob(artifactId, jobId);
                 } catch (e) {
                     console.error("Failed to start export", e);
@@ -2298,6 +2305,9 @@ export const useAppStore = create<AppState>()(
                         if (status === 'completed' || status === 'failed') {
                             get().stopExportPolling();
                             set({ isExporting: false });
+                            if (status === 'completed') {
+                                set({ autoDownloadJobId: { jobId, artifactId } });
+                            }
                             if (get().activeArtifactId === artifactId) {
                                 get().fetchExportJobs(artifactId);
                             }
@@ -2309,6 +2319,8 @@ export const useAppStore = create<AppState>()(
                 }, 1500);
                 set({ exportPollingInterval: interval });
             },
+
+            clearAutoDownload: () => set({ autoDownloadJobId: null }),
 
             stopExportPolling: () => {
                 const interval = get().exportPollingInterval;

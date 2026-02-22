@@ -1,5 +1,6 @@
 """PPTX renderer for Forge slides — programmatic shapes, no templates."""
 
+import io
 import re
 from pathlib import Path
 
@@ -118,8 +119,14 @@ def export_to_pptx(
     content_tree: SlidesContentTree,
     theme: SlideTheme,
     output_path: Path,
+    images: dict[str, io.BytesIO] | None = None,
 ) -> Path:
     """Export a SlidesContentTree to PPTX format.
+
+    Args:
+        images: Optional dict mapping slide ID to JPEG BytesIO buffers for
+                image_text slides. When provided, actual images are embedded
+                instead of text placeholders.
 
     Returns the output file path.
     """
@@ -134,7 +141,7 @@ def export_to_pptx(
         pptx_slide = prs.slides.add_slide(blank_layout)
 
         renderer = _RENDERERS.get(slide_data.slide_type, _render_content)
-        renderer(pptx_slide, slide_data, theme)
+        renderer(pptx_slide, slide_data, theme, images=images)
 
         # Add slide chrome (skip first and last slides)
         if 0 < i < total_slides - 1:
@@ -491,7 +498,7 @@ def _add_chart(slide, spec, theme):
 
 # === Slide-Type Renderer Functions ===
 
-def _render_title(slide, slide_data, theme):
+def _render_title(slide, slide_data, theme, **kwargs):
     """Title slide: centered title + subtitle."""
     _add_text_box(slide, slide_data.title or "",
                   left=MARGIN_LEFT, top=Inches(2.5),
@@ -509,7 +516,7 @@ def _render_title(slide, slide_data, theme):
     _set_slide_background(slide, theme)
 
 
-def _render_content(slide, slide_data, theme):
+def _render_content(slide, slide_data, theme, **kwargs):
     """Standard content slide: title + body/bullets in card."""
     _add_text_box(slide, slide_data.title or "",
                   left=TITLE_LEFT, top=TITLE_TOP,
@@ -545,7 +552,7 @@ def _render_content(slide, slide_data, theme):
     _set_slide_background(slide, theme)
 
 
-def _render_two_column(slide, slide_data, theme):
+def _render_two_column(slide, slide_data, theme, **kwargs):
     """Two-column layout: title + left/right body areas."""
     _add_text_box(slide, slide_data.title or "",
                   left=TITLE_LEFT, top=TITLE_TOP,
@@ -589,7 +596,7 @@ def _render_two_column(slide, slide_data, theme):
     _set_slide_background(slide, theme)
 
 
-def _render_comparison(slide, slide_data, theme):
+def _render_comparison(slide, slide_data, theme, **kwargs):
     """Comparison slide: title + two labeled columns in cards."""
     _add_text_box(slide, slide_data.title or "",
                   left=TITLE_LEFT, top=TITLE_TOP,
@@ -625,7 +632,7 @@ def _render_comparison(slide, slide_data, theme):
     _set_slide_background(slide, theme)
 
 
-def _render_timeline(slide, slide_data, theme):
+def _render_timeline(slide, slide_data, theme, **kwargs):
     """Timeline/roadmap slide: title + sequential items."""
     _add_text_box(slide, slide_data.title or "",
                   left=TITLE_LEFT, top=TITLE_TOP,
@@ -652,7 +659,7 @@ def _render_timeline(slide, slide_data, theme):
     _set_slide_background(slide, theme)
 
 
-def _render_chart(slide, slide_data, theme):
+def _render_chart(slide, slide_data, theme, **kwargs):
     """Chart slide: title + native chart or text fallback."""
     from core.studio.slides.charts import parse_chart_spec, normalize_chart_spec
 
@@ -694,8 +701,8 @@ def _render_chart(slide, slide_data, theme):
     _set_slide_background(slide, theme)
 
 
-def _render_image_text(slide, slide_data, theme):
-    """Image+text slide: split layout with image placeholder and body."""
+def _render_image_text(slide, slide_data, theme, **kwargs):
+    """Image+text slide: split layout with image (or placeholder) and body."""
     _add_text_box(slide, slide_data.title or "",
                   left=TITLE_LEFT, top=TITLE_TOP,
                   width=TITLE_WIDTH, height=TITLE_HEIGHT,
@@ -705,16 +712,27 @@ def _render_image_text(slide, slide_data, theme):
     image_el = _find_element(slide_data, "image")
     body_el = _find_element(slide_data, "body")
 
-    # Image placeholder
-    placeholder_text = "[Image]"
-    if image_el and image_el.content:
-        placeholder_text = f"[Image: {image_el.content}]"
-    _add_text_box(slide, placeholder_text,
-                  left=MARGIN_LEFT, top=BODY_TOP,
-                  width=COLUMN_WIDTH, height=BODY_HEIGHT,
-                  font_name=theme.font_body, font_size=_DESIGN_TOKENS["body_small_size"],
-                  font_color=theme.colors.secondary,
-                  alignment=PP_ALIGN.CENTER)
+    # Check for a generated image
+    images = kwargs.get("images") or {}
+    img_buf = images.get(slide_data.id) if slide_data.id else None
+
+    if img_buf is not None:
+        # Embed actual image
+        img_buf.seek(0)
+        slide.shapes.add_picture(
+            img_buf, MARGIN_LEFT, BODY_TOP, COLUMN_WIDTH, BODY_HEIGHT,
+        )
+    else:
+        # Text placeholder fallback
+        placeholder_text = "[Image]"
+        if image_el and image_el.content:
+            placeholder_text = f"[Image: {image_el.content}]"
+        _add_text_box(slide, placeholder_text,
+                      left=MARGIN_LEFT, top=BODY_TOP,
+                      width=COLUMN_WIDTH, height=BODY_HEIGHT,
+                      font_name=theme.font_body, font_size=_DESIGN_TOKENS["body_small_size"],
+                      font_color=theme.colors.secondary,
+                      alignment=PP_ALIGN.CENTER)
 
     if body_el and body_el.content:
         _add_text_box(slide, body_el.content,
@@ -726,7 +744,7 @@ def _render_image_text(slide, slide_data, theme):
     _set_slide_background(slide, theme)
 
 
-def _render_quote(slide, slide_data, theme):
+def _render_quote(slide, slide_data, theme, **kwargs):
     """Quote slide: large quote text with attribution."""
     quote_el = _find_element(slide_data, "quote")
     body_el = _find_element(slide_data, "body")
@@ -756,7 +774,7 @@ def _render_quote(slide, slide_data, theme):
     _set_slide_background(slide, theme)
 
 
-def _render_code(slide, slide_data, theme):
+def _render_code(slide, slide_data, theme, **kwargs):
     """Code slide: title + monospace code block."""
     _add_text_box(slide, slide_data.title or "",
                   left=TITLE_LEFT, top=TITLE_TOP,
@@ -775,7 +793,7 @@ def _render_code(slide, slide_data, theme):
     _set_slide_background(slide, theme)
 
 
-def _render_team(slide, slide_data, theme):
+def _render_team(slide, slide_data, theme, **kwargs):
     """Team/credits slide: title + team member list."""
     _add_text_box(slide, slide_data.title or "",
                   left=TITLE_LEFT, top=TITLE_TOP,

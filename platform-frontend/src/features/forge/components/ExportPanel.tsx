@@ -75,12 +75,13 @@ function ThemePickerDialog({
 }: {
     open: boolean;
     onOpenChange: (v: boolean) => void;
-    onSelect: (themeId: string, strictLayout?: boolean) => void;
+    onSelect: (themeId: string, strictLayout?: boolean, generateImages?: boolean) => void;
 }) {
     const themes = useAppStore(s => s.studioThemes);
     const fetchThemes = useAppStore(s => s.fetchThemes);
     const [selected, setSelected] = useState<string | null>(null);
     const [strictLayout, setStrictLayout] = useState(false);
+    const [generateImages, setGenerateImages] = useState(false);
     const [expandedBase, setExpandedBase] = useState<string | null>(null);
     const [variants, setVariants] = useState<Record<string, any[]>>({});
     const [loadingVariants, setLoadingVariants] = useState<string | null>(null);
@@ -110,10 +111,11 @@ function ThemePickerDialog({
 
     const handleConfirm = () => {
         if (selected) {
-            onSelect(selected, strictLayout || undefined);
+            onSelect(selected, strictLayout || undefined, generateImages || undefined);
             onOpenChange(false);
             setSelected(null);
             setStrictLayout(false);
+            setGenerateImages(false);
             setExpandedBase(null);
         }
     };
@@ -122,6 +124,7 @@ function ThemePickerDialog({
         if (!v) {
             setSelected(null);
             setStrictLayout(false);
+            setGenerateImages(false);
             setExpandedBase(null);
         }
         onOpenChange(v);
@@ -243,13 +246,22 @@ function ThemePickerDialog({
                 </ScrollArea>
 
                 <DialogFooter className="flex items-center sm:justify-between">
-                    <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
-                        <Switch
-                            checked={strictLayout}
-                            onCheckedChange={setStrictLayout}
-                        />
-                        Strict layout validation
-                    </label>
+                    <div className="flex flex-col gap-2">
+                        <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+                            <Switch
+                                checked={strictLayout}
+                                onCheckedChange={setStrictLayout}
+                            />
+                            Strict layout validation
+                        </label>
+                        <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+                            <Switch
+                                checked={generateImages}
+                                onCheckedChange={setGenerateImages}
+                            />
+                            Generate images (AI)
+                        </label>
+                    </div>
                     <div className="flex gap-2">
                         <Button variant="outline" onClick={() => handleOpenChange(false)}>
                             Cancel
@@ -289,14 +301,9 @@ export function ExportPanel({ artifact }: { artifact: any }) {
     const exportJobs = useAppStore(s => s.exportJobs);
     const isExporting = useAppStore(s => s.isExporting);
     const startExport = useAppStore(s => s.startExport);
+    const autoDownloadJobId = useAppStore(s => s.autoDownloadJobId);
+    const clearAutoDownload = useAppStore(s => s.clearAutoDownload);
     const [themePickerOpen, setThemePickerOpen] = useState(false);
-
-    // Only show for slides with content_tree
-    if (artifact.type !== 'slides' || !artifact.content_tree) return null;
-
-    const handleThemeSelected = (themeId: string, strictLayout?: boolean) => {
-        startExport(artifact.id, themeId, strictLayout);
-    };
 
     const handleDownload = async (job: any) => {
         const url = api.getExportDownloadUrl(artifact.id, job.id);
@@ -330,6 +337,26 @@ export function ExportPanel({ artifact }: { artifact: any }) {
         }
     };
 
+    // Auto-trigger save dialog when export completes
+    useEffect(() => {
+        if (!autoDownloadJobId) return;
+        // Only auto-download if this panel is showing the artifact that started the export
+        if (autoDownloadJobId.artifactId !== artifact.id) return;
+        const job = exportJobs.find((j: any) => j.id === autoDownloadJobId.jobId && j.status === 'completed');
+        if (job) {
+            clearAutoDownload();
+            handleDownload(job);
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [autoDownloadJobId, exportJobs, artifact.id]);
+
+    // Only show for slides with content_tree
+    if (artifact.type !== 'slides' || !artifact.content_tree) return null;
+
+    const handleThemeSelected = (themeId: string, strictLayout?: boolean, generateImages?: boolean) => {
+        startExport(artifact.id, themeId, strictLayout, generateImages);
+    };
+
     const formatSize = (bytes: number | null | undefined) => {
         if (!bytes) return '';
         if (bytes < 1024) return `${bytes} B`;
@@ -344,24 +371,23 @@ export function ExportPanel({ artifact }: { artifact: any }) {
                     <FileDown className="w-4 h-4" />
                     Export
                 </h3>
-                <Button
-                    size="sm"
+                <button
                     onClick={() => setThemePickerOpen(true)}
                     disabled={isExporting}
-                    className="h-7 text-xs"
+                    className="h-7 px-3 rounded-full text-xs font-bold bg-amber-100 text-amber-700 border border-amber-300 hover:bg-amber-200 dark:bg-amber-500/20 dark:text-amber-400 dark:border-amber-500/30 dark:hover:bg-amber-500/30 transition-colors disabled:opacity-50 flex items-center gap-1.5"
                 >
                     {isExporting ? (
                         <>
-                            <Loader2 className="w-3 h-3 animate-spin mr-1.5" />
+                            <Loader2 className="w-3 h-3 animate-spin" />
                             Exporting...
                         </>
                     ) : (
                         <>
-                            <Palette className="w-3 h-3 mr-1.5" />
+                            <Palette className="w-3 h-3" />
                             Export PPTX
                         </>
                     )}
-                </Button>
+                </button>
             </div>
 
             {/* Export jobs list */}
@@ -437,8 +463,8 @@ export function ExportButton({ artifactId }: { artifactId: string }) {
     const startExport = useAppStore(s => s.startExport);
     const [themePickerOpen, setThemePickerOpen] = useState(false);
 
-    const handleThemeSelected = (themeId: string, strictLayout?: boolean) => {
-        startExport(artifactId, themeId, strictLayout);
+    const handleThemeSelected = (themeId: string, strictLayout?: boolean, generateImages?: boolean) => {
+        startExport(artifactId, themeId, strictLayout, generateImages);
     };
 
     return (

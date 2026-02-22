@@ -22,7 +22,7 @@ def _run(coro):
 
 def test_export_artifact_success(monkeypatch):
     class FakeOrchestrator:
-        async def export_artifact(self, artifact_id, export_format, theme_id=None, strict_layout=False):
+        async def export_artifact(self, artifact_id, export_format, theme_id=None, strict_layout=False, generate_images=False):
             return {"id": _UUID_JOB, "status": "completed", "format": "pptx"}
 
     monkeypatch.setattr(studio_router, "_get_orchestrator", lambda: FakeOrchestrator())
@@ -49,7 +49,7 @@ def test_export_artifact_invalid_format(monkeypatch):
 
 def test_export_artifact_not_found(monkeypatch):
     class FakeOrchestrator:
-        async def export_artifact(self, artifact_id, export_format, theme_id=None, strict_layout=False):
+        async def export_artifact(self, artifact_id, export_format, theme_id=None, strict_layout=False, generate_images=False):
             raise ValueError(f"Artifact not found: {artifact_id}")
 
     monkeypatch.setattr(studio_router, "_get_orchestrator", lambda: FakeOrchestrator())
@@ -170,7 +170,7 @@ def test_get_export_job_global(monkeypatch, tmp_path):
 
 def test_export_strict_layout_failure(monkeypatch):
     class FakeOrchestrator:
-        async def export_artifact(self, artifact_id, export_format, theme_id=None, strict_layout=False):
+        async def export_artifact(self, artifact_id, export_format, theme_id=None, strict_layout=False, generate_images=False):
             return {"id": _UUID_JOB, "status": "failed" if strict_layout else "completed",
                     "format": "pptx", "error": "layout violation"}
 
@@ -183,7 +183,7 @@ def test_export_strict_layout_failure(monkeypatch):
 
 def test_export_strict_layout_opt_out(monkeypatch):
     class FakeOrchestrator:
-        async def export_artifact(self, artifact_id, export_format, theme_id=None, strict_layout=False):
+        async def export_artifact(self, artifact_id, export_format, theme_id=None, strict_layout=False, generate_images=False):
             return {"id": _UUID_JOB, "status": "completed", "format": "pptx"}
 
     monkeypatch.setattr(studio_router, "_get_orchestrator", lambda: FakeOrchestrator())

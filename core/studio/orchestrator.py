@@ -1,9 +1,13 @@
+import asyncio
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from uuid import uuid4
 
 from core.json_parser import parse_llm_json
 from core.model_manager import ModelManager
+
+logger = logging.getLogger(__name__)
 from core.schemas.studio_schema import (
     Artifact,
     ArtifactType,
@@ -184,10 +188,13 @@ class ForgeOrchestrator:
         export_format: "ExportFormat",
         theme_id: Optional[str] = None,
         strict_layout: bool = False,
+        generate_images: bool = False,
     ) -> Dict[str, Any]:
         """Export an artifact to the specified format.
 
         Currently supports PPTX export for slides artifacts.
+        When generate_images=True, the heavy work runs in the background
+        and the pending job is returned immediately for polling.
         Returns the export job dict.
         """
         from core.schemas.studio_schema import (
@@ -196,9 +203,7 @@ class ForgeOrchestrator:
             ExportStatus,
             SlidesContentTree,
         )
-        from core.studio.slides.exporter import export_to_pptx
         from core.studio.slides.themes import get_theme
-        from core.studio.slides.validator import validate_pptx
 
         # Load and verify artifact
         artifact = self.storage.load_artifact(artifact_id)
@@ -225,17 +230,70 @@ class ForgeOrchestrator:
 
         self.storage.save_export_job(export_job)
 
+        # Record the pending job on the artifact immediately
+        artifact.exports.append(ExportJobSummary(
+            id=export_job.id,
+            format=export_job.format.value,
+            status=export_job.status.value,
+            created_at=export_job.created_at,
+        ))
+        artifact.updated_at = datetime.now(timezone.utc)
+        self.storage.save_artifact(artifact)
+
+        if generate_images:
+            # Run heavy work in background — return pending job immediately
+            asyncio.create_task(self._run_export(
+                artifact_id, export_job, artifact.content_tree,
+                theme, strict_layout, generate_images,
+            ))
+            return export_job.model_dump(mode="json")
+
+        # Synchronous path (no image gen) — fast, complete inline
+        await self._run_export(
+            artifact_id, export_job, artifact.content_tree,
+            theme, strict_layout, generate_images,
+        )
+        return export_job.model_dump(mode="json")
+
+    async def _run_export(
+        self,
+        artifact_id: str,
+        export_job: Any,
+        content_tree_dict: dict,
+        theme: Any,
+        strict_layout: bool,
+        generate_images: bool,
+    ) -> None:
+        """Execute the actual export work (image generation + PPTX rendering)."""
+        from core.schemas.studio_schema import (
+            ExportStatus,
+            SlidesContentTree,
+        )
+        from core.studio.slides.exporter import export_to_pptx
+        from core.studio.slides.validator import validate_pptx
+
         try:
-            content_tree_model = SlidesContentTree(**artifact.content_tree)
+            content_tree_model = SlidesContentTree(**content_tree_dict)
 
             # Non-persisting notes repair for pre-Phase3 artifacts
             from core.studio.slides.notes import repair_speaker_notes
             export_content_tree = repair_speaker_notes(content_tree_model)
 
+            # Generate images if requested
+            slide_images = None
+            if generate_images:
+                try:
+                    from core.studio.slides.images import generate_slide_images
+                    slide_images = await generate_slide_images(export_content_tree)
+                except Exception as img_err:
+                    logger.warning(
+                        "Image generation failed, exporting without images: %s", img_err
+                    )
+
             output_path = self.storage.get_export_file_path(
-                artifact_id, export_job_id, export_format.value
+                artifact_id, export_job.id, export_job.format.value
             )
-            export_to_pptx(export_content_tree, theme, output_path)
+            export_to_pptx(export_content_tree, theme, output_path, images=slide_images)
 
             validation = validate_pptx(
                 output_path,
@@ -266,16 +324,15 @@ class ForgeOrchestrator:
 
         self.storage.save_export_job(export_job)
 
-        artifact.exports.append(ExportJobSummary(
-            id=export_job.id,
-            format=export_job.format.value,
-            status=export_job.status.value,
-            created_at=export_job.created_at,
-        ))
-        artifact.updated_at = datetime.now(timezone.utc)
-        self.storage.save_artifact(artifact)
-
-        return export_job.model_dump(mode="json")
+        # Update the artifact's exports summary with the final status
+        artifact = self.storage.load_artifact(artifact_id)
+        if artifact is not None:
+            for summary in artifact.exports:
+                if summary.id == export_job.id:
+                    summary.status = export_job.status.value
+                    break
+            artifact.updated_at = datetime.now(timezone.utc)
+            self.storage.save_artifact(artifact)
 
 
 def _parse_outline_item(data: dict) -> OutlineItem:
