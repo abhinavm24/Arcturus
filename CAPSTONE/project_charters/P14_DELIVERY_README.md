@@ -17,6 +17,12 @@ Core distributed tracing and metrics dashboard for agent runs:
 - **Admin API** — Query traces and metrics from MongoDB
 - **Fallback UI** — HTML page at `/api/admin/traces/view` when Jaeger is not running
 
+### Jaeger Trace Visualization
+
+![Jaeger trace: arcturus run.execute](p14_jaeger_trace.png)
+
+*Full trace of a run: `run.execute` → `agent_loop_run` → planner, DAG execution, agent iterations (RetrieverAgent, ThinkerAgent, ChatGenAgent, FormatterAgent), `lm.generate` and `code.execution` spans. Duration ~1m 21s, 28 spans, depth 7.*
+
 ---
 
 ## 2. Architecture Changes
