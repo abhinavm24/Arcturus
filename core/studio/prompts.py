@@ -86,6 +86,7 @@ def _get_type_specific_outline_guidance(artifact_type: ArtifactType) -> str:
   * chart — Data visualization with supporting context
   * stat — Key metrics displayed as large callouts (1-3 per slide)
   * image_text — Split layout with image area and descriptive text
+  * image_full — Full-bleed image covering entire slide with overlay text (dramatic visual impact)
   * quote — Featured quotation with attribution
   * code — Technical slide with monospace code block
   * team — Team members, credits, or acknowledgments
@@ -123,7 +124,7 @@ def _get_type_specific_draft_schema(artifact_type: ArtifactType) -> str:
   "slides": [
     {
       "id": "s1",
-      "slide_type": "title|content|two_column|comparison|timeline|chart|stat|image_text|quote|code|team",
+      "slide_type": "title|content|two_column|comparison|timeline|chart|stat|image_text|image_full|quote|code|team",
       "title": "Slide title",
       "elements": [
         {"id": "e1", "type": "title|subtitle|body|bullet_list|image|chart|code|quote|stat_callout", "content": "..."}
@@ -142,6 +143,7 @@ def _get_type_specific_draft_schema(artifact_type: ArtifactType) -> str:
   * Use "two_column" when comparing or contrasting
   * Use "quote" for testimonials or key insights
   * Use "chart" when referencing data or metrics
+  * Use "image_full" for dramatic full-bleed visuals (provide image description in an "image" element)
 
 For elements with type="chart", content MUST be a structured JSON object:
 {

@@ -1,6 +1,6 @@
 """Slide type and element type constants for the Forge slides pipeline."""
 
-# 11 supported slide types
+# 12 supported slide types
 SLIDE_TYPES = {
     "title",
     "content",
@@ -9,6 +9,7 @@ SLIDE_TYPES = {
     "timeline",
     "chart",
     "image_text",
+    "image_full",
     "quote",
     "code",
     "team",
@@ -37,6 +38,7 @@ SLIDE_TYPE_ELEMENTS = {
     "timeline":    ["title", "body", "bullet_list"],
     "chart":       ["title", "chart", "body"],
     "image_text":  ["title", "image", "body"],
+    "image_full":  ["title", "image", "body"],
     "quote":       ["quote", "body"],
     "code":        ["title", "code", "body"],
     "team":        ["title", "body", "bullet_list"],

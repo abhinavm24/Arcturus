@@ -45,7 +45,7 @@ async def generate_slide_images(
     """
     tasks: list[tuple[str, str]] = []
     for slide in content_tree.slides:
-        if slide.slide_type != "image_text":
+        if slide.slide_type not in ("image_text", "image_full"):
             continue
         for el in slide.elements:
             if el.type == "image" and el.content and isinstance(el.content, str):
