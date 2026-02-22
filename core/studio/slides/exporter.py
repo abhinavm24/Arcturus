@@ -62,7 +62,7 @@ _DESIGN_TOKENS = {
     "body_small_size": Pt(16),
     "code_size": Pt(14),
     "footer_size": Pt(10),
-    "quote_size": Pt(36),
+    "quote_size": Pt(28),
     "attribution_size": Pt(20),
 
     # Text frame margins
@@ -733,20 +733,21 @@ def _render_quote(slide, slide_data, theme):
 
     quote_text = ""
     if quote_el and quote_el.content:
-        quote_text = f"\u201C{quote_el.content}\u201D"
+        raw = quote_el.content.strip().strip('"\u201C\u201D')
+        quote_text = f"\u201C{raw}\u201D"
     elif slide_data.title:
         quote_text = slide_data.title
 
     _add_text_box(slide, quote_text,
-                  left=Inches(1.5), top=Inches(2.0),
-                  width=Inches(10.333), height=Inches(2.5),
+                  left=Inches(1.5), top=Inches(1.5),
+                  width=Inches(10.333), height=Inches(4.0),
                   font_name=theme.font_heading, font_size=_DESIGN_TOKENS["quote_size"],
                   font_color=theme.colors.primary,
                   alignment=PP_ALIGN.CENTER)
 
     if body_el and body_el.content:
         _add_text_box(slide, f"\u2014 {body_el.content}",
-                      left=Inches(1.5), top=Inches(5.0),
+                      left=Inches(1.5), top=Inches(5.8),
                       width=Inches(10.333), height=Inches(0.8),
                       font_name=theme.font_body, font_size=_DESIGN_TOKENS["attribution_size"],
                       font_color=theme.colors.text_light,
