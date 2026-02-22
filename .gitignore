@@ -86,6 +86,9 @@ benchmark_results.txt
 !platform-frontend/public/*.png
 !platform-frontend/public/*.jpg
 
+# Studio runtime output (generated PPTX artifacts)
+/studio/
+
 # Added by Arcturus
 .arcturus/
 .arcturus
