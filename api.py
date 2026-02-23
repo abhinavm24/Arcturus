@@ -167,6 +167,9 @@ from routers import studio as studio_router
 from routers import admin as admin_router
 app.include_router(studio_router.router, prefix="/api")
 app.include_router(admin_router.router, prefix="/api")
+from routers.marketplace import router as marketplace_router
+app.include_router(marketplace_router, prefix="/api/v3")
+
 
 # Gateway API v1 (P15)
 from gateway_api.v1 import router as gateway_v1_router
