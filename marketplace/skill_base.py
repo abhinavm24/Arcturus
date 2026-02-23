@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from pathlib import Path
 import yaml
 import logging
-logger = logging.getLogger("baazar")
+logger = logging.getLogger("bazaar")
 
 class ToolDefinition(BaseModel):
     """Schema for a single tool that a marketplace skill provides."""

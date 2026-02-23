@@ -1,4 +1,4 @@
-"""Tests for Day 1: SkillManifest, ToolDefinition, and MarketplaceSkill base class."""
+"""Tests for SkillManifest, ToolDefinition, and MarketplaceSkill base class."""
 import pytest
 from pathlib import Path
 from marketplace.skill_base import (
