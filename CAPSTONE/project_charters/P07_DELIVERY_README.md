@@ -2,11 +2,13 @@
 
 ## 1. Scope Delivered
 
-- **Wake word detection** via Porcupine (primary) and OpenWakeWord (alternate)
+- **Wake word detection** via Porcupine (primary) and Pocketsphinx (local) OpenWakeWord (pipeline ready but custom wake-phrase training not supported on windows)
+- **Dual STT providers**:  Deepgram Nova-2 (cloud, low-latency) and faster-Whisper (local, private) — switchable via config
+- **Auto-punctuation & formatting**: Both STT providers configured for punctuation, smart formatting, and numeral conversion
+- **user query**: Forwarded to the nexus as a channel
 - **30-second follow-up window**: No wake word required for 30 seconds after agent response
-- Configurable engine selection through `voice/config.py`
+- Configurable engine selection and STT provider through `voice/config.py`
 - Always-on microphone listener with threaded audio processing
-- Placeholder hook for STT pipeline trigger on wake word detection
 - Modular `voice/` package with clean separation of concerns
 
 ---
@@ -24,8 +26,8 @@ The Arcturus Voice Architecture is a state-driven pipeline designed for low-late
 └────┬─────┘
      ↓
 ┌──────────────┐
-│ Wake Word    │  (always on)
-│ Detector     │
+│ Wake Word    │  (always on, offline)
+│ Detector     │  Porcupine / Pocketsphinx/ OpenWakeWord
 └────┬─────────┘
      │ detected
      ↓
@@ -34,16 +36,17 @@ The Arcturus Voice Architecture is a state-driven pipeline designed for low-late
 └────┬─────────┘               │
      ↓                         │ interrupt
 ┌──────────────┐               │
-│ Streaming    │               │
 │ STT          │◄──────────────┘
+│ Whisper(local)│
+│ Deepgram(cloud)│
 └────┬─────────┘
-     ↓ partial/final text
+     ↓ raw text
+
 ┌──────────────┐
-│ Agent        │  (ONE agent)
+│ NEXUS        │ 
 └────┬─────────┘
      ↓ response tokens
 ┌──────────────┐
-│ Streaming    │
 │ TTS          │
 └────┬─────────┘
      ↓
@@ -54,9 +57,9 @@ The system follows a synchronous state-machine pattern:
 1. **Orchestration**: The `Orchestrator` manages the lifecycle of a voice interaction. It transitions between `IDLE`, `LISTENING` (transcribing), and `SPEAKING` (synthesizing) states, ensuring that only one phase is active at a time while allowing for immediate cancellation/preemption.
 2. **Perception**:
     - **Wake Word**: The `VoiceWakeService` (Porcupine-based) listens for the "Hey Arcturus" trigger.
-    - **STT**: Once triggered, the `STTService` captures the live audio stream and converts it to text.
-3. **Reasoning**: The `Orchestrator` passes the transcribed text to the `AgentLoop4` (the core agentic engine), which processes the query using its planning and tool-calling capabilities.
-4. **Action**: The agent's text output is piped to the `TTSService` for audio synthesis and playback.
+    - **STT**: Once triggered, audio is streamed to either Whisper (local) or Deepgram Nova-2 (cloud) for transcription, selected via `stt_provider` in config.
+3. **Reasoning**: The `Orchestrator` forwards the  text to the NEXUS `Agent`, which uses `ModelManager` for response generation.
+5. **Action**: The agent's text output is piped to the `TTSService` for audio synthesis and playback.
 
 ### 2.2 Design Principles
 
@@ -66,36 +69,55 @@ The system follows a synchronous state-machine pattern:
 | **Separation of concerns** | Each pipeline stage (wake → STT → Agent → TTS) is an independent module |
 | **Interruptibility** | Audio stream supports barge-in; a new wake word can interrupt ongoing TTS |
 | **Engine-agnostic** | Factory pattern (`create_wake_engine()`) allows swapping between Porcupine and OpenWakeWord via config |
-| **Offline-first** | Wake word detection is fully offline; STT and TTS are designed for local-first with cloud fallback |
+| **Provider-agnostic STT** | Config-driven switch between Whisper (local, private) and Deepgram (cloud, fast) — same `push_audio/start/stop/cancel` interface |
+| **LLM post-processing** | `TextRefiner` ensures clean, production-quality text regardless of STT provider quality |
+| **Cloud services with fallback option as Offline-** | Wake word detection Porcupine engine cloud based with offline pocketsphinx ; Deepgram for STT- cloud based with Whisper as local-offline  alternative |
 
 ### 2.3 Module Breakdown
 
 ```
 voice/
-├── config.py                  # Centralized configuration (engine selection, paths, thresholds)
+├── config.py                  # Centralized configuration (engine, STT provider, refiner toggle)
 ├── audio_input.py             # Microphone capture (PyAudio, 16kHz mono PCM)
 ├── wake_engine.py             # Factory: create_wake_engine() → engine instance
-├── porcupine_engine.py        # Porcupine wake word engine + STT trigger placeholder
+├── porcupine_engine.py        # Porcupine wake word engine
 ├── openwakeword_engine.py     # OpenWakeWord engine (alternate, TFLite-based)
-├── voice_wake_service.py      # Orchestrator: ties audio → engine → callback in a thread
+├── voice_wake_service.py      # Audio loop: mic → wake detection + audio push to STT
+├── stt_service.py             # Local STT via faster-whisper (small model, CPU/CUDA)
+├── deepgram_stt_service.py    # Cloud STT via Deepgram Nova-2 (WebSocket streaming)
+├── text_refiner.py            # LLM post-processor (Gemini 2.5 Flash Lite)
+├── orchestrator.py            # State machine: IDLE → LISTENING → SPEAKING
+├── agent.py                   # Voice agent: LLM intent extraction via ModelManager
+├── tts_service.py             # TTS placeholder (speaker output)
+├── .env                       # API keys (PICOVOICE_ACCESS_KEY, DEEPGRAM_API_KEY)
 ├── keywords/
 │   └── hey_arcturus.ppn       # Custom Porcupine wake word model
 └── models/
-    └── hey_jarvis_v0.1.tflite # OpenWakeWord model (alternate)-- to be finished
+    └── hey_jarvis_v0.1.tflite # OpenWakeWord model (alternate)
 ```
 
 ### 2.4 Data Flow (Current Implementation)
 
 ```
-main.py
-  └─► VoiceWakeService(on_wake_callback)
-        ├─► create_wake_engine()          # Returns PorcupineWakeEngine or OpenWakeWordEngine
-        ├─► AudioInput(sample_rate, frame_length)  # Opens mic stream
-        └─► _loop() [daemon thread]
-              ├─► audio.read()            # Read PCM frame from mic
-              ├─► engine.process(pcm)     # Check for wake word
-              │     └─► on_wake_detected()  # 🎙️ STT trigger placeholder
-              └─► on_wake(event_dict)     # Fire callback with wake event
+api.py (lifespan startup)
+  ├─► Orchestrator(wake, stt, agent, tts)   # Central state machine
+  │     └─► TextRefiner()                    # LLM post-processor initialized here
+  ├─► STTService / DeepgramSTTService        # Selected by config.stt_provider
+  ├─► VoiceWakeService(on_wake_callback)
+  │     ├─► create_wake_engine()             # Porcupine or OpenWakeWord
+  │     ├─► AudioInput(sample_rate, frame_length)
+  │     └─► _loop() [daemon thread]
+  │           ├─► audio.read()               # Read PCM from mic
+  │           ├─► engine.process(pcm)        # Wake word check
+  │           │     └─► orchestrator.on_wake()  # → state = LISTENING
+  │           └─► if LISTENING:
+  │                 stt.push_audio(pcm)      # Stream audio to STT
+  │
+  └─► STT on_text callback:
+        └─► orchestrator.on_text(raw_text)
+              ├─► TextRefiner.refine(raw)     # LLM cleanup (punctuation, numbers, grammar)
+              ├─► print refined text          # Console output
+              └─► agent.respond(refined)      # [Ready] Forward to nexus channel
 ```
 
 ---
@@ -113,30 +135,57 @@ main.py
 
 **Rule:** Wake word thread only does detection. No audio routing, no cleverness.
 
-### 2.6 STT — Speech-to-Text (🔲 placeholder)
+### 2.6 STT — Speech-to-Text (✅ implemented)
 
-- **Choice:** `faster-whisper` (tiny or small model)
-- **Config:** `vad_filter=True`, streaming chunks (200–300ms), CPU first
+| | Whisper (Local) | Deepgram (Cloud) |
+|---|---|---|
+| **Engine** | `faster-whisper` (small model) | Deepgram Nova-2 |
+| **Connection** | Direct inference | WebSocket streaming |
+| **Latency** | ~1–3s per chunk (CPU) | ~100–300ms |
+| **Offline** | ✅ | ❌ (requires API key) |
+| **Punctuation** | `condition_on_previous_text=True` | `punctuate=true`, `smart_format=true` |
+| **Numbers** | Via TextRefiner LLM | `numerals=true` + TextRefiner |
+| **VAD** | `vad_filter=True` | Server-side |
+| **Noise reduction** | `noisereduce` spectral gating (optional) | Same |
+
+- **Config switch:** `stt_provider: "whisper"` or `"deepgram"` in `voice/config.py`
+- **Same interface:** Both implement `push_audio()`, `start()`, `stop()`, `cancel()`
 - **Hard rule:** STT is NOT agentic. It streams text → that's it.
 
-### 2.7 TTS — Text-to-Speech (🔲 placeholder)
+### 2.7 Text Refinement — LLM Post-Processing (✅ implemented)
 
-- **Choice:** Azure Speech  | `piper-tts` (local), fallback: Coqui TTS
+- **Model:** Gemini 2.5 Flash Lite via `ModelManager`
+- **Runs in:** Orchestrator's `on_text()` callback, before forwarding to agent
+- **Capabilities:**
+  - Auto-punctuation (periods, commas, question marks)
+  - Number formatting ("twenty three" → "23", "three percent" → "3%")
+  - Sentence capitalization and proper noun detection
+  - Filler word removal ("um", "uh", "like", "you know")
+  - Minor grammar correction (without changing meaning)
+- **Fast-path:** Utterances ≤3 words skip the LLM call (rule-based capitalize + punctuate)
+- **Safety:** Falls back to raw text if LLM fails or returns garbage
+- **Configurable:** Toggle on/off and change model via `voice/config.py` → `text_refiner`
+
+### 2.8 TTS — Text-to-Speech (🔲 placeholder)
+
+- **Choice:** Azure Speech | `piper-tts` (local), fallback: Coqui TTS
 - **Rule:** TTS must obey hard stop within <50ms on interrupt.
 
-### 2.8 Agent (🔲 placeholder)
+### 2.9 Agent (✅ implemented)
 
-- **Choice:** One LLM-backed agent with fixed prompt
-- No tools. No memory. No planning.
+- **Engine:** LLM-backed agent using `ModelManager` (Gemini / Ollama)
+- **Prompt:** Extracts user INTENT and ACTION from refined transcript
+- **Response:** Concise 1–2 sentence verbal response for voice playback
 - Skills: "Explain X", "Summarise", "Answer concisely"
 
 ---
 
 ## 3. API And UI Changes
 
-- **FastAPI Integration**: The voice pipeline is now part of the central API. It is initialized in the `lifespan` event of `api.py`.
+- **FastAPI Integration**: The voice pipeline is initialized during the `lifespan` event of `api.py`. It creates the Orchestrator, STT service (based on `stt_provider` config), wake service, agent, TTS, and TextRefiner — all wired together before the API starts accepting requests.
 - **Voice Router**: Added `/api/voice/start` (POST) to allow triggering the voice listening state via the web UI or external events.
-- **Shared State**: The `Orchestrator` uses the same `AgentLoop4` instance as the REST API, ensuring consistent memory and context across voice and text interfaces.
+- **Provider Selection at Startup**: `api.py` reads `VOICE_CONFIG["stt_provider"]` and instantiates either `STTService` (Whisper) or `DeepgramSTTService` — the Orchestrator is provider-agnostic.
+- **Startup Log**: The console prints `✅ [Voice] Pipeline WARM and listening (Provider: whisper|deepgram)` on successful initialization.
 
 ---
 
@@ -150,9 +199,12 @@ main.py
 
 ## 5. Test Evidence
 
-- ✅ Wake word detection tested manually (`uv run wake_word.py`)
-- ✅ "Hey Arcturus" wake event fires with correct event payload
-- 🔲 STT → Agent → TTS roundtrip (pending pipeline integration)
+- ✅ Wake word detection tested manually — "Hey Arcturus" wake event fires with correct event payload
+- ✅ Whisper STT transcribes speech after wake word detection (local, CPU)
+- ✅ Deepgram STT streams and transcribes via WebSocket (cloud)
+- ✅ TextRefiner post-processes raw transcripts (punctuation, numbers, grammar)
+- ✅ Orchestrator logs refined text to console with diff view when refinement occurs
+- 🔲 Full STT → Refiner → Agent → TTS roundtrip with voice playback (agent responds, TTS pending)
 
 ---
 
@@ -167,8 +219,12 @@ main.py
 
 - Microphone access requires user consent (OS-level permission)
 - Porcupine requires `PICOVOICE_ACCESS_KEY` stored in `.env` (not committed)
+- Deepgram requires `DEEPGRAM_API_KEY` stored in `voice/.env` (not committed)
+- Gemini requires `GEMINI_API_KEY` for the TextRefiner (not committed)
 - No audio data leaves the device during wake word detection (offline)
-- Future STT: local-first by default (faster-whisper), no cloud dependency
+- Whisper STT is fully local — no data leaves the device
+- Deepgram STT streams audio to the cloud — use Whisper for privacy-sensitive deployments
+- TextRefiner sends only text (not audio) to Gemini for refinement
 
 ---
 
@@ -176,9 +232,11 @@ main.py
 
 | Gap | Status | Notes |
 |---|---|---|
-| STT pipeline | 🔲 Placeholder | `on_wake_detected()` in `porcupine_engine.py` |
-| TTS pipeline | 🔲 Not started | Needs piper-tts integration |
-| Agent integration | 🔲 Not started | Wire transcribed text → agent → TTS |
+| STT pipeline | ✅ Done | Whisper (local) and Deepgram (cloud) both implemented and switchable |
+| Text refinement | ✅ Done | LLM post-processing via Gemini 2.5 Flash Lite |
+| Agent integration | ✅ Implemented | `agent.py` uses `ModelManager` for intent extraction; wired but commented out in Orchestrator pending TTS |
+| TTS pipeline | 🔲 Placeholder | `tts_service.py` has stub; needs piper-tts or Azure Speech integration |
+| Full voice roundtrip | 🔲 Pending TTS | Orchestrator's agent → TTS path is commented out until TTS is real |
 | Barge-in / interrupt | 🔲 Design only | Wake word during TTS should cancel playback |
 | `tflite-runtime` on Windows/Py3.13 | ⚠️ Blocked | OpenWakeWord requires `tflite-runtime` which is unavailable for Python 3.13 on Windows. Use Porcupine engine or switch `inference_framework="onnx"` |
 
@@ -187,18 +245,31 @@ main.py
 ## 9. Rollback Plan
 
 - Remove `voice/` directory
-- Remove voice-related dependencies from `pyproject.toml` (`pvporcupine`, `openwakeword`, `pyaudio`, `sounddevice`)
-- No other modules are affected
+- Remove voice-related dependencies from `pyproject.toml` (`pvporcupine`, `openwakeword`, `pyaudio`, `sounddevice`, `faster-whisper`, `websocket-client`, `noisereduce`)
+- Remove voice imports and lifespan block from `api.py`
+- No other modules are affected — voice is fully additive
 
 ---
 
 ## 10. Demo Steps
 
 1. Ensure `PICOVOICE_ACCESS_KEY` is set in `voice/.env`
-2. Run: `uv run wake_word.py`
-3. Say **"Hey Arcturus"**
-4. Observe wake event in terminal:
+2. Ensure `GEMINI_API_KEY` is set in `.env` (for TextRefiner)
+3. (Optional) Set `DEEPGRAM_API_KEY` in `voice/.env` if using Deepgram provider
+4. Start the API: `uv run api.py`
+5. Observe startup logs:
    ```
-   🔥 WAKE EVENT: {'type': 'VOICE_WAKE', 'timestamp': '...', 'wake_word': 'Hey Arcturus'}
+   ✅ [TextRefiner] Initialized (model: gemini/gemini-2.5-flash-lite)
+   ✅ [Voice] Pipeline WARM and listening (Provider: whisper)
    ```
-5. Press Enter to stop
+6. Say **"Hey Arcturus"**
+7. Observe wake detection:
+   ```
+   🎙️ [Orchestrator] Wake word detected. Listening...
+   ```
+8. Speak a command (e.g., "set a timer for twenty three minutes")
+9. Observe refined transcript:
+   ```
+   🗨️ [Orchestrator] "set a timer for twenty three minutes" → "Set a timer for 23 minutes."
+   ```
+10. The follow-up window stays open for 30 seconds (no wake word needed)

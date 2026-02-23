@@ -11,16 +11,15 @@ class AudioInput:
         self.frame_length = frame_length
         self.q = queue.Queue()
         self.stream = None
+        self._running = False
 
     def _callback(self, indata, frames, time, status):
-        if status:
-            # You may want to log this
-            pass
-        # indata is float32 [-1, 1], convert to int16-like scale if needed
-        pcm = (indata[:, 0] * 32767).astype(np.int16)
-        self.q.put(pcm)
+        if self._running:
+            pcm = (indata[:, 0] * 32767).astype(np.int16)
+            self.q.put(pcm)
 
     def start(self):
+        self._running = True
         self.stream = sd.InputStream(
             samplerate=self.sample_rate,
             channels=1,
@@ -30,15 +29,30 @@ class AudioInput:
         )
         self.stream.start()
 
-    def read(self):
+    def read(self, timeout: float = 0.5):
         """
-        Returns: tuple[int] of length frame_length (like your PyAudio version)
+        Returns one frame of PCM audio as a tuple of int16 samples.
+
+        Uses a timeout so the calling thread remains responsive to
+        signals (Ctrl+C / KeyboardInterrupt).  Returns None if no
+        audio arrived within the timeout window — callers should
+        treat None as a no-op and loop again.
         """
-        pcm = self.q.get()
-        return tuple(pcm.tolist())
+        try:
+            pcm = self.q.get(timeout=timeout)
+            return tuple(pcm.tolist())
+        except queue.Empty:
+            return None
 
     def stop(self):
+        self._running = False
         if self.stream:
             self.stream.stop()
             self.stream.close()
             self.stream = None
+        # Drain any remaining items so threads unblock immediately
+        while not self.q.empty():
+            try:
+                self.q.get_nowait()
+            except queue.Empty:
+                break

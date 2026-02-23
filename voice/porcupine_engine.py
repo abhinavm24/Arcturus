@@ -3,16 +3,33 @@
 import pvporcupine
 import os
 import logging
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load .env from voice/ dir AND project root to ensure keys are found
+_VOICE_DIR = Path(__file__).resolve().parent
+_PROJECT_ROOT = _VOICE_DIR.parent
+load_dotenv(_PROJECT_ROOT / ".env")
 
 logger = logging.getLogger(__name__)
 
 class PorcupineWakeEngine:
-    def __init__(self, keyword_path, sensitivity):
+    def __init__(self, keyword_path, sensitivity, on_wake_detected=None):
+        self.on_wake_detected_cb = on_wake_detected
+        access_key = os.getenv("PICOVOICE_ACCESS_KEY")
+        if not access_key:
+            raise ValueError(
+                "❌ PICOVOICE_ACCESS_KEY not found in environment. "
+                "Set it in voice/.env or the project root .env"
+            )
+
+        if not os.path.exists(keyword_path):
+            raise FileNotFoundError(
+                f"❌ Wake word keyword file not found: {keyword_path}"
+            )
+
         self.porcupine = pvporcupine.create(
-            access_key=os.getenv("PICOVOICE_ACCESS_KEY"),
+            access_key=access_key,
             keyword_paths=[keyword_path],
             sensitivities=[sensitivity]
         )
@@ -27,28 +44,9 @@ class PorcupineWakeEngine:
 
     def process(self, pcm):
         detected = self.porcupine.process(pcm) >= 0
-        if detected:
-            self.on_wake_detected()
+        if detected and self.on_wake_detected_cb:
+            self.on_wake_detected_cb()
         return detected
-
-    def on_wake_detected(self):
-        """
-        Placeholder: called when the wake word is detected.
-        Wire this up to trigger the STT (Speech-to-Text) pipeline
-        so the system can capture and transcribe the user's command.
-
-        TODO: Replace with actual STT pipeline trigger, e.g.:
-            - Start recording the user's utterance
-            - Stream audio to an STT service (Whisper, Google STT, etc.)
-            - Pass the transcribed text to the agent for processing
-        """
-        logger.info("🎙️ Wake word detected — STT pipeline trigger point")
-        print("🎙️ Wake word detected — STT pipeline trigger point")
-        # Example future integration:
-        # from voice.stt_pipeline import STTPipeline
-        # stt = STTPipeline()
-        # transcript = stt.listen_and_transcribe()
-        # agent.handle_user_input(transcript)
 
     def close(self):
         self.porcupine.delete()
