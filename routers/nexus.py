@@ -190,3 +190,103 @@ async def slack_events(request: Request) -> Dict[str, Any]:
 
     # Slack requires a 200 OK with any body to acknowledge receipt.
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Discord Interactions / Gateway webhook
+# ---------------------------------------------------------------------------
+
+
+@router.post("/discord/events")
+async def discord_events(request: Request) -> Dict[str, Any]:
+    """Receive Discord webhook events (Interactions endpoint or Gateway relay).
+
+    Handles two Discord payload types:
+
+    * ``PING`` (type 1) — initial handshake when the Interactions endpoint is
+      first configured in the Discord Developer Portal; returns ``{"type": 1}``
+      so Discord confirms ownership.
+    * ``APPLICATION_COMMAND`` / message event (type 2 / custom relay) — routes
+      the message through the Nexus bus (ingest → mock agent → deliver reply).
+
+    Signature verification is performed using Ed25519 when ``DISCORD_PUBLIC_KEY``
+    is set on the adapter.  Requests with an invalid signature are rejected with
+    HTTP 401 (Discord's required status for failed signature checks).
+    Signature checking is skipped in dev/test mode (when the key is empty).
+    """
+    body = await request.body()
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    # 1. Optional Ed25519 signature verification.
+    bus = _get_bus()
+    adapter = bus.adapters.get("discord")
+    public_key: str = getattr(adapter, "public_key", "") if adapter else ""
+    if public_key:
+        timestamp = request.headers.get("X-Signature-Timestamp", "")
+        signature = request.headers.get("X-Signature-Ed25519", "")
+        from channels.discord import DiscordAdapter as _DiscordAdapter
+        if not _DiscordAdapter.verify_signature(body, timestamp, signature, public_key):
+            raise HTTPException(status_code=401, detail="Invalid Discord signature")
+
+    # 2. PING handshake (Discord requires type=1 response).
+    if payload.get("type") == 1:
+        return {"type": 1}
+
+    # 3. Route message events through the bus.
+    #    Supports both Interactions (type 2 APPLICATION_COMMAND) and
+    #    a simple relay format: {"type": "message", "channel_id": ..., ...}
+    event_type = payload.get("type")
+    if event_type == 2:
+        # Slash command / application command interaction
+        data = payload.get("data", {})
+        interaction_id = str(payload.get("id", uuid.uuid4()))
+        guild_id = str(payload.get("guild_id", "unknown"))
+        channel_id = str(payload.get("channel_id", "unknown"))
+        member = payload.get("member", {})
+        user = member.get("user", payload.get("user", {}))
+        sender_id = str(user.get("id", "unknown"))
+        sender_name = user.get("username", "unknown")
+        # For slash commands the text is the command name + options joined
+        options = data.get("options", [])
+        text_parts = [data.get("name", "")]
+        for opt in options:
+            text_parts.append(str(opt.get("value", "")))
+        text = " ".join(filter(None, text_parts)) or "command"
+
+        envelope = MessageEnvelope.from_discord(
+            guild_id=guild_id,
+            channel_id=channel_id,
+            sender_id=sender_id,
+            sender_name=sender_name,
+            text=text,
+            message_id=interaction_id,
+        )
+        await bus.roundtrip(envelope)
+        # Discord Interactions requires an immediate acknowledgement
+        return {"type": 5}  # DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
+
+    elif event_type == "message" or payload.get("channel_id"):
+        # Simple relay format used by tests and gateway relay bots
+        guild_id = str(payload.get("guild_id", "unknown"))
+        channel_id = str(payload.get("channel_id", "unknown"))
+        sender_id = str(payload.get("author", {}).get("id", payload.get("sender_id", "unknown")))
+        sender_name = payload.get("author", {}).get("username", payload.get("sender_name", "unknown"))
+        text = payload.get("content", payload.get("text", ""))
+        message_id = str(payload.get("id", payload.get("message_id", str(uuid.uuid4()))))
+        is_bot = payload.get("author", {}).get("bot", False)
+
+        if not is_bot and text:
+            envelope = MessageEnvelope.from_discord(
+                guild_id=guild_id,
+                channel_id=channel_id,
+                sender_id=sender_id,
+                sender_name=sender_name,
+                text=text,
+                message_id=message_id,
+            )
+            await bus.roundtrip(envelope)
+
+    return {"ok": True}

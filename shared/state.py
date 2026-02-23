@@ -85,11 +85,32 @@ settings = {}
 # Nexus MessageBus instance — shared across all routers
 _message_bus = None
 
+
+def _load_group_activation() -> dict:
+    """Read per-channel group_activation policies from config/channels.yaml."""
+    import yaml
+    from pathlib import Path
+    cfg_path = Path(__file__).parent.parent / "config" / "channels.yaml"
+    if not cfg_path.exists():
+        return {}
+    try:
+        with open(cfg_path) as f:
+            cfg = yaml.safe_load(f) or {}
+        channels = cfg.get("channels", {})
+        return {
+            ch: (channels[ch].get("policies", {}).get("group_activation", "always-on"))
+            for ch in channels
+        }
+    except Exception:
+        return {}
+
+
 def get_message_bus():
     """Get the Nexus MessageBus instance, creating it if needed.
 
     Wires together: MessageFormatter + MessageRouter (mock agent) +
-    TelegramAdapter + WebChatAdapter.
+    TelegramAdapter + WebChatAdapter + SlackAdapter.
+    Group activation policies are loaded from config/channels.yaml.
     """
     global _message_bus
     if _message_bus is None:
@@ -99,8 +120,14 @@ def get_message_bus():
         from channels.telegram import TelegramAdapter
         from channels.webchat import WebChatAdapter
         from channels.slack import SlackAdapter
+        from channels.discord import DiscordAdapter
         formatter = MessageFormatter()
-        router = MessageRouter(agent_factory=create_mock_agent, formatter=formatter)
+        group_activation = _load_group_activation()
+        router = MessageRouter(
+            agent_factory=create_mock_agent,
+            formatter=formatter,
+            group_activation=group_activation,
+        )
         _message_bus = MessageBus(
             router=router,
             formatter=formatter,
@@ -108,6 +135,7 @@ def get_message_bus():
                 "telegram": TelegramAdapter(),
                 "webchat": WebChatAdapter(),
                 "slack": SlackAdapter(),
+                "discord": DiscordAdapter(),
             },
         )
     return _message_bus

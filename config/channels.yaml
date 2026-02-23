@@ -43,10 +43,11 @@ channels:
       max_retries: 3
       retry_backoff_seconds: 1.0
 
-  # Discord — not yet wired (Week 2)
+  # Discord — wired in Week 3 (DiscordAdapter in channels/discord.py)
   discord:
-    enabled: false
+    enabled: true
     token_env: DISCORD_BOT_TOKEN
+    public_key_env: DISCORD_PUBLIC_KEY
     parse_mode: markdown
     policies:
       group_activation: mention-only
