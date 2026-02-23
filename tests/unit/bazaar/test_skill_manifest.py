@@ -60,7 +60,7 @@ def test_manifest_loads_from_example_yaml():
     manifest = load_manifest(Path("marketplace/skills/_example/manifest.yaml"))
     assert manifest.name == "example_skill"
     assert manifest.version == "1.0.0"
-    assert len(manifest.tools) == 1
+    assert len(manifest.tools) == 2
     assert manifest.tools[0].name == "say_hello"
 
 
