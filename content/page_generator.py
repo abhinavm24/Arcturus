@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Dict, Any, List
 
 from content import oracle_client
-from content.section_agents import overview_generate_section, detail_generate_section, data_generate_section, source_generate_section
+from content.section_agents import overview_generate_section, detail_generate_section, data_generate_section, source_generate_section, comparison_generate_section
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "pages"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -48,7 +48,7 @@ async def generate_page(query: str, template: str = "topic_overview", created_by
     resources = {"oracle_results": results}
 
     # run agents in parallel
-    coros = [overview_generate_section(query, {}, resources), detail_generate_section(query, {}, resources), data_generate_section(query, {}, resources), source_generate_section(query, {}, resources)]
+    coros = [overview_generate_section(query, {}, resources), detail_generate_section(query, {}, resources), data_generate_section(query, {}, resources), source_generate_section(query, {}, resources), comparison_generate_section(query, {}, resources)]
     sections = await asyncio.gather(*coros)
 
     # compose page

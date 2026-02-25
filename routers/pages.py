@@ -87,12 +87,12 @@ PAGES_META: Dict[str, Dict[str, Any]] = {}
 FOLDERS: Dict[str, Dict[str, Any]] = {}
 SHARES: Dict[str, Any] = {}
 VERSIONS: Dict[str, List[Dict[str, Any]]] = {}
-EXPORT_JOBS: Dict[str, Dict[str, Any]] = {}
 
 
 @router.get("", response_model=ListResponse)
 async def list_pages(q: Optional[str] = None, folder_id: Optional[str] = None, tags: Optional[str] = None, page: int = 1, per_page: int = 25):
-    """List pages (stub). Supports basic pagination and optional filters."""
+    """List pages with optional filters. Shows folder relationships clearly."""
+    
     # Try to delegate to page_generator if available
     try:
         if hasattr(page_generator, "list_pages"):
@@ -101,14 +101,53 @@ async def list_pages(q: Optional[str] = None, folder_id: Optional[str] = None, t
     except Exception:
         pass
 
-    # Fallback: return entries from in-memory PAGES_META
+    # Fallback: return entries from in-memory PAGES_META with folder info
     items = []
     for pid, meta in list(PAGES_META.items()):
-        items.append(PageListItem(id=pid, title=meta.get("title", "Untitled"), excerpt=meta.get("excerpt"), tags=meta.get("tags", []), folder_id=meta.get("folder_id"), owner_id=meta.get("owner_id"), updated_at=meta.get("updated_at")))
+        if meta.get("deleted"):
+            continue
+            
+        # Apply filters
+        if folder_id and meta.get("folder_id") != folder_id:
+            continue
+        if q and q.lower() not in meta.get("title", "").lower():
+            continue
+        if tags:
+            page_tags = meta.get("tags", [])
+            tag_filter = tags.split(",")
+            if not any(tag.strip() in page_tags for tag in tag_filter):
+                continue
+        
+        # Get folder name for display
+        folder_name = None
+        folder_id_val = meta.get("folder_id")
+        if folder_id_val and folder_id_val in FOLDERS:
+            folder_name = FOLDERS[folder_id_val]["name"]
+        
+        items.append(PageListItem(
+            id=pid,
+            title=meta.get("title", "Untitled"),
+            excerpt=meta.get("excerpt"),
+            tags=meta.get("tags", []),
+            folder_id=meta.get("folder_id"),
+            owner_id=meta.get("owner_id"),
+            updated_at=meta.get("updated_at")
+        ))
 
     start = (page - 1) * per_page
     sliced = items[start:start + per_page]
-    return {"items": sliced, "total": len(items), "page": page, "per_page": per_page}
+    
+    return {
+        "items": sliced,
+        "total": len(items),
+        "page": page,
+        "per_page": per_page,
+        "filters": {
+            "query": q,
+            "folder_id": folder_id,
+            "tags": tags
+        }
+    }
 
 
 class CreateFolderRequest(BaseModel):
@@ -119,28 +158,131 @@ class CreateFolderRequest(BaseModel):
 
 @router.post("/folders", status_code=201)
 async def create_folder(req: CreateFolderRequest):
+    """Create a new folder for organizing pages"""
     fid = uuid.uuid4().hex
-    FOLDERS[fid] = {"id": fid, "name": req.name, "parent_id": req.parent_id, "description": req.description}
+    FOLDERS[fid] = {
+        "id": fid,
+        "name": req.name,
+        "parent_id": req.parent_id,
+        "description": req.description,
+        "created_at": "now",
+        "page_count": 0
+    }
     return {"id": fid, "name": req.name}
 
 
+@router.get("/folders")
+async def list_folders():
+    """List all folders with page counts"""
+    # Calculate page counts for each folder
+    for folder_id in FOLDERS:
+        count = sum(1 for page_meta in PAGES_META.values() 
+                   if page_meta.get("folder_id") == folder_id and not page_meta.get("deleted"))
+        FOLDERS[folder_id]["page_count"] = count
+    
+    return {"folders": list(FOLDERS.values())}
+
+
+@router.get("/folders/{folder_id}")
+async def get_folder(folder_id: str):
+    """Get folder details with list of pages in it"""
+    folder = FOLDERS.get(folder_id)
+    if not folder:
+        raise HTTPException(status_code=404, detail="folder not found")
+    
+    # Get pages in this folder
+    pages_in_folder = []
+    for page_id, page_meta in PAGES_META.items():
+        if page_meta.get("folder_id") == folder_id and not page_meta.get("deleted"):
+            pages_in_folder.append({
+                "id": page_id,
+                "title": page_meta.get("title", "Untitled"),
+                "updated_at": page_meta.get("updated_at")
+            })
+    
+    return {
+        **folder,
+        "pages": pages_in_folder,
+        "page_count": len(pages_in_folder)
+    }
+
+
+@router.patch("/folders/{folder_id}")
+async def update_folder(folder_id: str, req: CreateFolderRequest):
+    """Update folder details"""
+    folder = FOLDERS.get(folder_id)
+    if not folder:
+        raise HTTPException(status_code=404, detail="folder not found")
+    
+    folder.update({
+        "name": req.name,
+        "description": req.description,
+        "parent_id": req.parent_id
+    })
+    return folder
+
+
+@router.delete("/folders/{folder_id}")
+async def delete_folder(folder_id: str, move_pages_to: Optional[str] = None):
+    """Delete folder, optionally moving pages to another folder"""
+    folder = FOLDERS.get(folder_id)
+    if not folder:
+        return {"status": "deleted", "id": folder_id}  # Idempotent
+    
+    # Handle pages in the folder
+    for page_id, page_meta in PAGES_META.items():
+        if page_meta.get("folder_id") == folder_id:
+            page_meta["folder_id"] = move_pages_to  # None means root level
+    
+    del FOLDERS[folder_id]
+    return {
+        "status": "deleted", 
+        "id": folder_id,
+        "pages_moved_to": move_pages_to or "root"
+    }
+
+
 class UpdatePageMetadata(BaseModel):
-    title: Optional[str]
-    tags: Optional[List[str]]
-    folder_id: Optional[str]
-    visibility: Optional[str]
+    title: Optional[str] = None
+    tags: Optional[List[str]] = None
+    folder_id: Optional[str] = None
+    visibility: Optional[str] = None  # 'private', 'public', 'shared'
 
 
 @router.patch("/{page_id}")
 async def update_page_metadata(page_id: str, req: UpdatePageMetadata):
-    # Apply changes to in-memory meta; real implementation should persist and version
+    """Update page metadata including folder assignment"""
+    
+    # Verify page exists
+    try:
+        page_generator.load_page(page_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="page not found")
+    
+    # Verify folder exists if folder_id is provided
+    if req.folder_id and req.folder_id not in FOLDERS:
+        raise HTTPException(status_code=400, detail=f"folder {req.folder_id} not found")
+    
+    # Apply changes to in-memory meta
     meta = PAGES_META.setdefault(page_id, {})
-    for k, v in req.dict(exclude_unset=True).items():
+    updates = req.dict(exclude_unset=True)
+    
+    for k, v in updates.items():
         meta[k] = v
-    # create a new version marker
+    
+    meta["updated_at"] = "now"  # timestamp
+    
+    # Create a new version marker for the metadata change
     ver_id = uuid.uuid4().hex
-    VERSIONS.setdefault(page_id, []).append({"version_id": ver_id, "timestamp": "now", "author_id": "api", "summary": "metadata update"})
-    return {"id": page_id, "version_id": ver_id}
+    VERSIONS.setdefault(page_id, []).append({
+        "version_id": ver_id,
+        "timestamp": "now",
+        "author_id": "api",
+        "summary": f"metadata update: {', '.join(updates.keys())}",
+        "changes": updates
+    })
+    
+    return {"id": page_id, "version_id": ver_id, "updated_metadata": updates}
 
 
 @router.delete("/{page_id}")
@@ -164,60 +306,129 @@ async def list_versions(page_id: str):
     return {"versions": versions}
 
 
-class RevertRequest(BaseModel):
-    version_id: str
-    reason: Optional[str]
+# Action-based unified endpoint for page operations
+class PageActionRequest(BaseModel):
+    action: str  # 'revert', 'share', 'export'
+    # Revert fields
+    version_id: Optional[str] = None
+    reason: Optional[str] = None
+    
+    # Share fields  
+    share_type: Optional[str] = None  # 'link' or 'users'
+    expires_at: Optional[str] = None
+    password: Optional[str] = None
+    permissions: Optional[str] = None
+    user_ids: Optional[List[str]] = None
+    
+    # Export fields
+    format: Optional[str] = "pdf"  # 'pdf', 'html', 'markdown', 'docx'
 
 
-@router.post("/{page_id}/revert")
-async def revert_page(page_id: str, req: RevertRequest):
-    # Stub: create a new version representing the revert
-    ver_id = uuid.uuid4().hex
-    VERSIONS.setdefault(page_id, []).append({"version_id": ver_id, "timestamp": "now", "author_id": "api", "summary": f"reverted to {req.version_id}"})
-    return {"id": page_id, "version_id": ver_id}
+# Unified action jobs tracker
+ACTION_JOBS: Dict[str, Dict[str, Any]] = {}
 
 
-class ShareUser(BaseModel):
-    user_id: str
-    permissions: str
-
-
-class ShareRequest(BaseModel):
-    type: str  # 'link' or 'users'
-    expires_at: Optional[str]
-    password: Optional[str]
-    permissions: Optional[str]
-    users: Optional[List[ShareUser]]
-
-
-@router.post("/{page_id}/share", status_code=201)
-async def share_page(page_id: str, req: ShareRequest):
-    if req.type == "link":
-        token = uuid.uuid4().hex
-        url = f"/share/{token}"
-        SHARES.setdefault(page_id, []).append({"type": "link", "token": token, "expires_at": req.expires_at, "permissions": req.permissions})
-        return {"share_url": url, "token": token, "expires_at": req.expires_at}
-
-    added = []
-    failed = []
-    if req.users:
-        for u in req.users:
-            # naive add
-            added.append({"user_id": u.user_id, "permissions": u.permissions})
-        SHARES.setdefault(page_id, []).append({"type": "users", "entries": added})
-    return {"added": added, "failed": failed}
-
-
-@router.post("/{page_id}/export", status_code=202)
-async def export_page(page_id: str, format: str = "pdf"):
+@router.post("/{page_id}/actions", status_code=202)
+async def execute_page_action(page_id: str, req: PageActionRequest):
+    """Unified endpoint for page actions: revert, share, export"""
+    
+    # Verify page exists
+    try:
+        page_generator.load_page(page_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="page not found")
+    
     job_id = uuid.uuid4().hex
-    EXPORT_JOBS[job_id] = {"status": "queued", "page_id": page_id, "format": format}
-    return {"job_id": job_id, "status_url": f"/pages/export/jobs/{job_id}"}
+    
+    if req.action == "revert":
+        if not req.version_id:
+            raise HTTPException(status_code=400, detail="version_id required for revert")
+        
+        ACTION_JOBS[job_id] = {
+            "status": "processing",
+            "action": "revert",
+            "page_id": page_id,
+            "version_id": req.version_id,
+            "reason": req.reason
+        }
+        
+        # Create new version representing the revert
+        ver_id = uuid.uuid4().hex
+        VERSIONS.setdefault(page_id, []).append({
+            "version_id": ver_id,
+            "timestamp": "now", 
+            "author_id": "api",
+            "summary": f"reverted to {req.version_id}: {req.reason or 'no reason'}"
+        })
+        
+        ACTION_JOBS[job_id].update({"status": "completed", "result_version_id": ver_id})
+        
+    elif req.action == "share":
+        if not req.share_type:
+            raise HTTPException(status_code=400, detail="share_type required for share")
+            
+        ACTION_JOBS[job_id] = {
+            "status": "processing",
+            "action": "share", 
+            "page_id": page_id,
+            "share_type": req.share_type
+        }
+        
+        if req.share_type == "link":
+            token = uuid.uuid4().hex
+            url = f"/shared/{token}"
+            SHARES.setdefault(page_id, []).append({
+                "type": "link",
+                "token": token,
+                "expires_at": req.expires_at,
+                "permissions": req.permissions or "read"
+            })
+            ACTION_JOBS[job_id].update({
+                "status": "completed",
+                "share_url": url,
+                "token": token,
+                "expires_at": req.expires_at
+            })
+            
+        elif req.share_type == "users":
+            if not req.user_ids:
+                raise HTTPException(status_code=400, detail="user_ids required for user sharing")
+            
+            shared_users = [{"user_id": uid, "permissions": req.permissions or "read"} for uid in req.user_ids]
+            SHARES.setdefault(page_id, []).append({
+                "type": "users",
+                "entries": shared_users
+            })
+            ACTION_JOBS[job_id].update({
+                "status": "completed",
+                "shared_users": shared_users
+            })
+    
+    elif req.action == "export":
+        ACTION_JOBS[job_id] = {
+            "status": "processing",
+            "action": "export",
+            "page_id": page_id,
+            "format": req.format
+        }
+        
+        # TODO: Implement actual export logic
+        # For now, simulate completion
+        ACTION_JOBS[job_id].update({
+            "status": "completed", 
+            "download_url": f"/api/pages/{page_id}/download/{job_id}.{req.format}"
+        })
+        
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown action: {req.action}")
+    
+    return {"job_id": job_id, "status_url": f"/api/pages/actions/{job_id}"}
 
 
-@router.get("/export/jobs/{job_id}")
-async def get_export_job(job_id: str):
-    job = EXPORT_JOBS.get(job_id)
+@router.get("/actions/{job_id}")
+async def get_action_status(job_id: str):
+    """Get status of any page action (revert, share, export)"""
+    job = ACTION_JOBS.get(job_id)
     if not job:
-        raise HTTPException(status_code=404, detail="export job not found")
+        raise HTTPException(status_code=404, detail="action job not found")
     return job
