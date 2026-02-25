@@ -176,12 +176,12 @@ def test_11_pptx_open_validation_passes(tmp_path) -> None:
 
 
 def test_12_slide_count_in_range() -> None:
-    """clamp_slide_count enforces [8, 15] range."""
-    from core.studio.slides.generator import clamp_slide_count
+    """clamp_slide_count enforces [MIN_SLIDES, MAX_SLIDES] range."""
+    from core.studio.slides.generator import clamp_slide_count, MIN_SLIDES, MAX_SLIDES
 
-    assert clamp_slide_count(3) == 8
-    assert clamp_slide_count(50) == 15
-    assert 8 <= clamp_slide_count(10) <= 15
+    assert clamp_slide_count(1) == MIN_SLIDES
+    assert clamp_slide_count(50) == MAX_SLIDES
+    assert MIN_SLIDES <= clamp_slide_count(10) <= MAX_SLIDES
 
 
 def test_13_speaker_notes_present_in_export(tmp_path) -> None:
