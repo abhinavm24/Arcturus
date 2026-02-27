@@ -108,15 +108,15 @@ def _load_group_activation() -> dict:
 def get_message_bus():
     """Get the Nexus MessageBus instance, creating it if needed.
 
-    Wires together: MessageFormatter + MessageRouter (mock agent) +
-    TelegramAdapter + WebChatAdapter + SlackAdapter.
+    Wires together: MessageFormatter + MessageRouter (real AgentLoop4 via runs API) +
+    TelegramAdapter + WebChatAdapter + SlackAdapter + DiscordAdapter + WhatsAppAdapter.
     Group activation policies are loaded from config/channels.yaml.
     """
     global _message_bus
     if _message_bus is None:
         from gateway.bus import MessageBus
         from gateway.formatter import MessageFormatter
-        from gateway.router import MessageRouter, create_mock_agent
+        from gateway.router import MessageRouter, create_runs_agent
         from channels.telegram import TelegramAdapter
         from channels.webchat import WebChatAdapter
         from channels.slack import SlackAdapter
@@ -125,7 +125,7 @@ def get_message_bus():
         formatter = MessageFormatter()
         group_activation = _load_group_activation()
         router = MessageRouter(
-            agent_factory=create_mock_agent,
+            agent_factory=create_runs_agent,
             formatter=formatter,
             group_activation=group_activation,
         )

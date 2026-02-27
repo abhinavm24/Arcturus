@@ -7,7 +7,6 @@ Discord markdown, WebChat HTML, or plain text fallback).
 
 import html
 import re
-from typing import Optional
 
 
 # Characters that must be escaped in Telegram MarkdownV2

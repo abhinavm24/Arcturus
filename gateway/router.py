@@ -4,8 +4,12 @@ Routes normalized MessageEnvelopes to the appropriate agent instances
 based on channel, conversation ID, and session affinity policies.
 """
 
+import asyncio
 import logging
+import os
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
+
+import httpx
 
 from gateway.envelope import MessageEnvelope
 
@@ -227,3 +231,115 @@ async def create_mock_agent(session_id: str) -> Any:
             }
 
     return MockAgent(session_id)
+
+
+# ---------------------------------------------------------------------------
+# Real-agent factory — backed by AgentLoop4 via /api/runs
+# ---------------------------------------------------------------------------
+
+# Configurable via env; default assumes co-located FastAPI server
+_ARCTURUS_BASE_URL = os.getenv("ARCTURUS_BASE_URL", "http://localhost:8000")
+_POLL_INTERVAL_S = 2.0    # seconds between GET /output polls
+_POLL_TIMEOUT_S = 120.0   # total wait before giving up
+
+
+async def create_runs_agent(session_id: str) -> Any:
+    """Factory that creates an agent backed by the real AgentLoop4 via /api/runs.
+
+    The returned agent object calls ``POST /api/runs`` for each message and
+    polls ``GET /api/runs/{run_id}/output`` until the run completes or times
+    out, then returns the extracted text reply.
+
+    Known limitation: each call starts a *fresh* AgentLoop4 run — there is no
+    cross-message conversation memory.  This is a documented P01 known gap;
+    persistent session continuity requires deeper runs-API changes (P15 scope).
+
+    Args:
+        session_id: Nexus session identifier (not forwarded to runs API yet).
+
+    Returns:
+        RunsAgentAdapter with ``process_message(envelope) -> Dict`` method.
+    """
+
+    class RunsAgentAdapter:
+        """Adapter that delegates to AgentLoop4 via the /api/runs HTTP API."""
+
+        def __init__(self, session_id: str):
+            self.session_id = session_id
+
+        async def process_message(self, envelope: MessageEnvelope) -> Dict[str, Any]:
+            base = _ARCTURUS_BASE_URL
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                # 1. Submit the run
+                try:
+                    post_resp = await client.post(
+                        f"{base}/api/runs",
+                        json={"query": envelope.content},
+                    )
+                    post_resp.raise_for_status()
+                    run_id = post_resp.json()["id"]
+                except Exception as exc:
+                    logger.error("create_runs_agent: failed to start run: %s", exc)
+                    return {
+                        "status": "error",
+                        "reply": "Sorry, I could not reach the agent. Please try again.",
+                        "channel": envelope.channel,
+                        "sender_id": envelope.sender_id,
+                    }
+
+                # 2. Poll for completion
+                deadline = asyncio.get_event_loop().time() + _POLL_TIMEOUT_S
+                poll_client = httpx.AsyncClient(timeout=10.0)
+                try:
+                    while True:
+                        if asyncio.get_event_loop().time() >= deadline:
+                            logger.warning(
+                                "create_runs_agent: run %s timed out after %ss",
+                                run_id, _POLL_TIMEOUT_S,
+                            )
+                            return {
+                                "status": "timeout",
+                                "reply": "The agent took too long to respond. Please try again.",
+                                "channel": envelope.channel,
+                                "sender_id": envelope.sender_id,
+                            }
+
+                        try:
+                            get_resp = await poll_client.get(
+                                f"{base}/api/runs/{run_id}/output"
+                            )
+                            get_resp.raise_for_status()
+                            data = get_resp.json()
+                        except Exception as exc:
+                            logger.error(
+                                "create_runs_agent: poll error for run %s: %s", run_id, exc
+                            )
+                            await asyncio.sleep(_POLL_INTERVAL_S)
+                            continue
+
+                        status = data.get("status")
+                        if status == "running":
+                            await asyncio.sleep(_POLL_INTERVAL_S)
+                            continue
+
+                        if status == "failed":
+                            return {
+                                "status": "failed",
+                                "reply": "The agent encountered an error processing your request.",
+                                "channel": envelope.channel,
+                                "sender_id": envelope.sender_id,
+                            }
+
+                        # completed (or unknown status — treat as done)
+                        output = data.get("output") or "Done."
+                        return {
+                            "status": "completed",
+                            "reply": output,
+                            "channel": envelope.channel,
+                            "sender_id": envelope.sender_id,
+                            "run_id": run_id,
+                        }
+                finally:
+                    await poll_client.aclose()
+
+    return RunsAgentAdapter(session_id)

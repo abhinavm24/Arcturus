@@ -31,7 +31,7 @@ Usage::
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, Optional, Set
 
 from channels.base import ChannelAdapter

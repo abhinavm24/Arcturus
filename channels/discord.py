@@ -145,7 +145,6 @@ class DiscordAdapter(ChannelAdapter):
         """
         try:
             from nacl.signing import VerifyKey
-            from nacl.exceptions import BadSignatureError
 
             vk = VerifyKey(bytes.fromhex(public_key))
             message = timestamp.encode() + body

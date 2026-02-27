@@ -38,7 +38,7 @@ channels:
     signing_secret_env: SLACK_SIGNING_SECRET
     parse_mode: mrkdwn
     policies:
-      group_activation: mention-only
+      group_activation: always-on
       dm_allowlist: []
       max_retries: 3
       retry_backoff_seconds: 1.0
