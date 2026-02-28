@@ -21,3 +21,9 @@ collections:
     distance: cosine
     is_tenant: false
     indexed_payload_fields: [category, source]
+
+  arcturus_rag_chunks:      # RAG document chunks + conversation history
+    dimension: 768         # same embedding model as memories (nomic-embed-text)
+    distance: cosine
+    is_tenant: false       # RAG can add user_id/space_id filter later
+    indexed_payload_fields: [doc, doc_type, session_id]
