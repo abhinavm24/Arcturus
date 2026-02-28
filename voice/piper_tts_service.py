@@ -51,6 +51,7 @@ from shared.state import (
     tts_mark_stop,
     tts_request_cancel,
 )
+from voice.config import VOICE_CONFIG
 
 # ── Sentence-boundary regex ───────────────────────────────────
 # Splits on . ! ? followed by whitespace or end — keeps the punctuation.
@@ -131,7 +132,8 @@ class PiperTTSService:
             self._is_speaking = True
             self._cancelled = False
         # Global speaking state + grace window for barge-in gating.
-        tts_mark_start(grace_ms=300)
+        grace_ms = VOICE_CONFIG.get("barge_in", {}).get("grace_ms", 700)
+        tts_mark_start(grace_ms=grace_ms)
 
         preview = text[:120].replace('\n', ' ')
         print(f"🔊 [PiperTTS] Speaking: \"{preview}{'...' if len(text) > 120 else ''}\"")
@@ -187,7 +189,8 @@ class PiperTTSService:
         with self._lock:
             self._is_speaking = True
             self._cancelled = False
-        tts_mark_start(grace_ms=300)
+        grace_ms = VOICE_CONFIG.get("barge_in", {}).get("grace_ms", 700)
+        tts_mark_start(grace_ms=grace_ms)
 
         print("🔊 [PiperTTS] Streaming mode — waiting for first chunk...")
 

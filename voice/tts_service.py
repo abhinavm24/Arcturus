@@ -32,6 +32,7 @@ from shared.state import (
     tts_mark_stop,
     tts_request_cancel,
 )
+from voice.config import VOICE_CONFIG
 
 try:
     import azure.cognitiveservices.speech as speechsdk
@@ -230,7 +231,8 @@ class TTSService:
             self._is_speaking = True
             self._cancelled = False
         # Global speaking state + grace window for barge-in gating.
-        tts_mark_start(grace_ms=300)
+        grace_ms = VOICE_CONFIG.get("barge_in", {}).get("grace_ms", 700)
+        tts_mark_start(grace_ms=grace_ms)
 
         preview = text[:120].replace('\n', ' ')
         persona_tag = f" [{self._active_persona_name}]" if self._active_persona_name else ""
@@ -320,7 +322,8 @@ class TTSService:
         with self._lock:
             self._is_speaking = True
             self._cancelled = False
-        tts_mark_start(grace_ms=300)
+        grace_ms = VOICE_CONFIG.get("barge_in", {}).get("grace_ms", 700)
+        tts_mark_start(grace_ms=grace_ms)
 
         persona_tag = f" [{self._active_persona_name}]" if self._active_persona_name else ""
         print(f"🔊 [TTS]{persona_tag} Streaming mode — waiting for first chunk...")

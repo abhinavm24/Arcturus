@@ -9,7 +9,7 @@ from voice.audio_input import AudioInput
 from voice.wake_engine import create_wake_engine
 from voice.config import VOICE_CONFIG
 from voice.barge_in import BargeInDetector, BargeInConfig
-from shared.state import tts_is_speaking, tts_in_barge_in_grace_window
+from shared.state import tts_is_speaking
 
 
 class VoiceWakeService:
@@ -99,12 +99,11 @@ class VoiceWakeService:
 
                 state = self.orchestrator.state if self.orchestrator else "IDLE"
 
-                # ── HARD GATE mic → VAD/STT during TTS SPEAKING ─────────────
-                # Non-negotiable: while TTS is speaking, mic frames must NOT reach
-                # wake/VAD/STT. We still allow *barge-in detection* after grace,
-                # via a separate detector that does not feed STT.
+                # ── HARD GATE: no wake or STT during SPEAKING ─────────────────
+                # While TTS is playing, do NOT run the wake engine. Speaker output
+                # (echo) can false-trigger wake detection and interrupt without the
+                # user saying the wake word. Run wake only when not SPEAKING.
                 if state != "SPEAKING":
-                    # Wake engine is allowed in IDLE/LISTENING/THINKING.
                     self.engine.process(pcm)
 
                 if not self.orchestrator:
@@ -126,25 +125,14 @@ class VoiceWakeService:
                     self._barge.reset_speech_streak()
 
                 elif state == "SPEAKING":
-                    # Hard gate: do not process wake engine, do not feed STT, do not
-                    # call any existing VAD modules here.
+                    # During TTS: no STT, no wake engine, no VAD barge-in. Echo from
+                    # speakers would otherwise false-trigger wake or barge-in. User
+                    # can interrupt only after TTS ends (e.g. say wake word in LISTENING).
                     if not tts_is_speaking():
-                        # If orchestrator says SPEAKING but TTS isn't active, treat as ambient.
                         self._barge.observe_ambient(pcm)
                         self._barge.reset_speech_streak()
                         continue
-
-                    # Grace window: suppress barge-in completely for ~300ms on TTS start.
-                    if tts_in_barge_in_grace_window():
-                        self._barge.reset_speech_streak()
-                        continue
-
-                    interrupt, rms, ratio = self._barge.should_interrupt(pcm)
-                    if interrupt:
-                        # Minimal logging: orchestrator will log state transition.
-                        self._barge.reset_speech_streak()
-                        self.orchestrator.interrupt()
-                    # else: keep accumulating until continuous speech threshold is hit.
+                    self._barge.reset_speech_streak()
                 else:
                     self._barge.reset_speech_streak()
 

@@ -80,21 +80,22 @@ VOICE_CONFIG = {
     # Barge-in configuration (mic→TTS interruption)
     # -----------------------------
     # These thresholds intentionally bias toward *near-field* speech to avoid
-    # distant talkers or background TV triggering interruption.
+    # distant talkers, background TV, or speaker echo triggering interruption.
+    # Stricter values reduce self-interrupt when TTS is picked up by the mic.
     "barge_in": {
         # Suppress barge-in detection for this long after TTS starts
-        # (attack phase / echo leakage).
-        "grace_ms": 300,
+        # (attack phase / echo leakage). Increased from 300 to reduce echo false triggers.
+        "grace_ms": 700,
 
-        # Continuous speech required (120–200ms recommended).
-        "min_speech_ms": 160,
+        # Continuous speech required before interrupt (longer = less echo-triggered barge-in).
+        "min_speech_ms": 350,
 
         # Energy must be at least this multiple of ambient noise floor.
-        "energy_ratio": 2.5,
+        "energy_ratio": 3.0,
 
-        # Near-field gates (int16 RMS units).
-        "min_absolute_rms": 900,
-        "min_rms_above_noise": 250,
+        # Near-field gates (int16 RMS units). Higher = only loud, close speech triggers.
+        "min_absolute_rms": 1600,
+        "min_rms_above_noise": 300,
     },
 
     # -----------------------------
