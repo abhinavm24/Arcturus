@@ -2,7 +2,40 @@
 
 ## 1. Scope Delivered
 
-**Week 3+ - Google Chat Adapter:**
+**Week 3+ - Matrix Adapter (Channel 10/10):**
+- ✅ **channels/matrix.py**: MatrixAdapter — polling-based inbound via `GET /_matrix/client/v3/sync`; outbound via `PUT /_matrix/client/v3/rooms/{roomId}/send/m.room.message/{txnId}`; `set_bus_callback()` for inbound dispatch; skips own messages, non-m.text events, empty body; no sidecar needed
+- ✅ **gateway/envelope.py**: `from_matrix()` constructor — room_id, sender_id, homeserver extracted from sender_id, is_direct flag
+- ✅ **gateway/formatter.py**: `"matrix": "_format_plain"` in channel map (Matrix clients render Markdown client-side)
+- ✅ **config/channels.yaml**: `matrix` channel block — homeserver_url, user_id, access_token, sync_interval env-var refs
+- ✅ **shared/state.py**: `MatrixAdapter` wired into `get_message_bus()` + `set_bus_callback` wired after bus creation
+- ✅ **tests/test_matrix_roundtrip.py**: 9 tests (send/error/network, bus roundtrip, session affinity, envelope fields, sync loop dispatch/skip-own/skip-empty)
+
+**Week 3+ - Signal Adapter (Channel 9/10):**
+- ✅ **signal_bridge/app.py**: Python FastAPI sidecar — polls signal-cli `GET /v1/receive` every 2s, forwards to FastAPI; `POST /send` proxies to signal-cli; HMAC-SHA256 signing
+- ✅ **signal_bridge/README.md**: Setup guide for signal-cli install, registration, and bridge startup
+- ✅ **channels/signal.py**: SignalAdapter — `POST {bridge_url}/send` with HMAC-SHA256 `X-Signal-Secret`; `verify_signature()` static method; dev-mode (empty secret → accept all)
+- ✅ **gateway/envelope.py**: `from_signal()` — phone_number or group_id as conversation_id, group support
+- ✅ **gateway/formatter.py**: `"signal": "_format_plain"` (Signal renders plain text natively)
+- ✅ **routers/nexus.py**: `POST /api/nexus/signal/inbound` — HMAC verify, skip empty text, `from_signal()` envelope
+- ✅ **shared/state.py**: `SignalAdapter` wired into `get_message_bus()`
+- ✅ **tests/test_signal_roundtrip.py**: 11 tests (send/error/network, sig valid/invalid/dev-mode, bus roundtrip, session affinity, webhook×3)
+
+**Week 3+ - Teams Adapter (Channel 8/10):**
+- ✅ **channels/teams.py**: TeamsAdapter — Bot Framework REST API; outbound `POST {service_url}/v3/conversations/{id}/activities`; `verify_token()` static method (Bearer token compare, dev-mode)
+- ✅ **gateway/envelope.py**: `from_teams()` — composite `conversation_id = f"{team_id}:{channel_id}"`, stores `service_url` in metadata
+- ✅ **gateway/formatter.py**: `_format_teams()` — headings → `**bold**`, `_italic_` → `*italic*`
+- ✅ **routers/nexus.py**: `POST /api/nexus/teams/events` — skips `type != "message"` and `from.role == "bot"`, builds from_teams() envelope
+- ✅ **shared/state.py**: `TeamsAdapter` wired into `get_message_bus()`
+- ✅ **config/channels.yaml**: `teams` channel block — app_id, app_password, service_url env-var refs
+- ✅ **tests/test_teams_roundtrip.py**: 11 tests
+
+**Week 3+ - iMessage Adapter (Channel 7/10, via BlueBubbles):**
+- ✅ **channels/imessage.py**: iMessageAdapter — BlueBubbles REST API; outbound `POST {base_url}/api/v1/message/text`; `verify_signature()` HMAC-SHA256 static method; dev-mode
+- ✅ **gateway/envelope.py**: `from_imessage()` constructor
+- ✅ **routers/nexus.py**: `POST /api/nexus/imessage/inbound` — HMAC verify, skip empty text
+- ✅ **tests/test_imessage_roundtrip.py**: 11 tests
+
+**Week 3+ - Google Chat Adapter (Channel 6/10):**
 - ✅ **channels/googlechat.py**: GoogleChatAdapter — dual-mode delivery (incoming webhook + service-account Bearer token); token verification for inbound events
 - ✅ **gateway/envelope.py**: `from_googlechat()` constructor — space_name, sender, thread_name, message_name
 - ✅ **gateway/formatter.py**: `_format_googlechat()` — headings → bold, links → plain text
@@ -46,25 +79,34 @@
 ## 2. Architecture Changes
 
 **New directories:**
-- `channels/`: Channel adapter implementations — `base.py`, `telegram.py`, `webchat.py`, `slack.py`, `discord.py`, `whatsapp.py`
+- `channels/`: Channel adapter implementations — `base.py`, `telegram.py`, `webchat.py`, `slack.py`, `discord.py`, `whatsapp.py`, `googlechat.py`, `imessage.py`, `teams.py`, `signal.py`, `matrix.py`
 - `gateway/`: Unified message bus — `envelope.py`, `formatter.py`, `bus.py`, `router.py`
 - `whatsapp_bridge/`: Node.js Baileys sidecar for WhatsApp
+- `signal_bridge/`: Python FastAPI sidecar for Signal (signal-cli bridge)
 
-**New files (Week 3):**
-- `channels/discord.py`: DiscordAdapter (Ed25519 sig verify, 2000-char truncation)
-- `channels/whatsapp.py`: WhatsAppAdapter (Baileys bridge, HMAC-SHA256)
-- `whatsapp_bridge/index.js`, `package.json`, `README.md`: Baileys sidecar
+**New files (Week 3+, latest):**
+- `channels/matrix.py`: MatrixAdapter (polling sync API, no sidecar, set_bus_callback)
+- `channels/signal.py`: SignalAdapter (signal_bridge sidecar, HMAC-SHA256)
+- `channels/teams.py`: TeamsAdapter (Bot Framework REST, verify_token)
+- `channels/imessage.py`: iMessageAdapter (BlueBubbles REST, HMAC-SHA256)
+- `channels/googlechat.py`: GoogleChatAdapter (webhook + service-account)
+- `signal_bridge/app.py`, `README.md`: Python FastAPI sidecar for signal-cli
+- `tests/test_matrix_roundtrip.py`: 9 Matrix tests
+- `tests/test_signal_roundtrip.py`: 11 Signal tests
+- `tests/test_teams_roundtrip.py`: 11 Teams tests
+- `tests/test_imessage_roundtrip.py`: 11 iMessage tests
 - `tests/test_get_run_output.py`: 3 endpoint tests for GET /api/runs/{id}/output
 - `tests/test_runs_agent_factory.py`: 5 factory tests for create_runs_agent
 
-**Modified files (Week 3):**
+**Modified files (Week 3+):**
 - `routers/runs.py`: Added `_extract_output_str()` helper + `GET /api/runs/{run_id}/output`
 - `gateway/router.py`: Added `create_runs_agent` factory + `RunsAgentAdapter`; kept `create_mock_agent` for tests
-- `gateway/envelope.py`: Added `from_whatsapp()`
-- `shared/state.py`: Swapped factory to `create_runs_agent`; added Discord + WhatsApp adapters to bus
-- `routers/nexus.py`: Added Discord + WhatsApp inbound endpoints
-- `.env.example`: Added `WHATSAPP_BRIDGE_URL`, `WHATSAPP_BRIDGE_SECRET`, `DISCORD_BOT_TOKEN`, `DISCORD_PUBLIC_KEY`, `ARCTURUS_BASE_URL`
-- `config/channels.yaml`: Added discord + whatsapp channel config blocks; Slack set to `always-on`
+- `gateway/envelope.py`: Added `from_whatsapp()`, `from_googlechat()`, `from_imessage()`, `from_teams()`, `from_signal()`, `from_matrix()`
+- `gateway/formatter.py`: Added `_format_teams()`, `_format_googlechat()`; plain map entries for signal, matrix, imessage, whatsapp
+- `shared/state.py`: All 10 adapters wired; Matrix `set_bus_callback` after bus creation
+- `routers/nexus.py`: Inbound endpoints for all channels (Discord, WhatsApp, GoogleChat, iMessage, Teams, Signal)
+- `.env.example`: All channel env-var sections added
+- `config/channels.yaml`: All 10 channel blocks present
 
 **Key architectural flow (Week 3 — real agent):**
 ```
@@ -137,13 +179,13 @@ GET  /api/runs/{run_id}/output           [NEW — Week 3]
 
 ## 5. Test Evidence
 
-**Automated test suite: 98 tests, all passing (2026-02-27):**
+**Automated test suite: 118 tests (P01 scope), 463 total passed (2026-02-28):**
 
 | File | Tests | What it covers |
 |------|-------|----------------|
 | `tests/acceptance/p01_nexus/test_multichannel_roundtrip.py` | 8 | Contract + delivery README checks |
 | `tests/integration/test_nexus_session_affinity.py` | 5 | Session affinity across channels |
-| `tests/test_message_formatter.py` | 12 | Formatter for all 6 channels |
+| `tests/test_message_formatter.py` | 12 | Formatter for all 10 channels |
 | `tests/test_message_bus.py` | 11 | ingest/deliver/roundtrip/dedup/retry/media |
 | `tests/test_webchat_roundtrip.py` | 5 | WebChat end-to-end via TestClient |
 | `tests/test_webchat_sse.py` | 6 | SSE subscribe/push/route contract |
@@ -154,6 +196,10 @@ GET  /api/runs/{run_id}/output           [NEW — Week 3]
 | `tests/test_get_run_output.py` | 3 | GET /api/runs/{id}/output endpoint |
 | `tests/test_runs_agent_factory.py` | 5 | create_runs_agent factory (mocked HTTP) |
 | `tests/test_googlechat_roundtrip.py` | 8 | Google Chat send/error/network/no-creds/bus/affinity/webhook/lifecycle |
+| `tests/test_imessage_roundtrip.py` | 11 | iMessage send/error/network/sig, roundtrip, affinity, webhook×3 |
+| `tests/test_teams_roundtrip.py` | 11 | Teams send/error/network/token, roundtrip, affinity, webhook×3 |
+| `tests/test_signal_roundtrip.py` | 11 | Signal send/error/network, sig×3, roundtrip, affinity, webhook×3 |
+| `tests/test_matrix_roundtrip.py` | 9 | Matrix send/error/network, roundtrip, affinity, envelope, sync loop×3 |
 
 **Run command:**
 ```bash
@@ -164,7 +210,9 @@ uv run python -m pytest tests/acceptance/p01_nexus/ \
   tests/test_slack_roundtrip.py tests/test_group_activation.py \
   tests/test_discord_roundtrip.py tests/test_whatsapp_roundtrip.py \
   tests/test_get_run_output.py tests/test_runs_agent_factory.py \
-  tests/test_p01_latency.py tests/test_googlechat_roundtrip.py -v
+  tests/test_p01_latency.py tests/test_googlechat_roundtrip.py \
+  tests/test_imessage_roundtrip.py tests/test_teams_roundtrip.py \
+  tests/test_signal_roundtrip.py tests/test_matrix_roundtrip.py -v
 ```
 
 **Live Slack integration verified (Week 3 — real agent):**
@@ -182,7 +230,7 @@ uv run python -m pytest tests/acceptance/p01_nexus/ \
 
 **Command:** `uv run python -m pytest tests/ --ignore=tests/stress -q`
 
-**Status:** ✅ **414 passed, 2 skipped** (2026-02-27)
+**Status:** ✅ **463 passed, 2 skipped** (2026-02-28)
 
 P01 changes are fully additive and non-breaking:
 - All new code in `channels/`, `gateway/`, `routers/nexus.py` is isolated
@@ -205,14 +253,20 @@ P01 changes are fully additive and non-breaking:
 
 ## 8. Known Gaps
 
-**Resolved in Week 3:**
+**Resolved in Week 3+:**
 - ✅ Real AgentLoop4 wiring via `create_runs_agent`
 - ✅ Discord adapter implemented and tested
 - ✅ WhatsApp adapter + Baileys bridge implemented and tested
 - ✅ Group activation policies enforced in `MessageRouter._is_activated()`
 - ✅ `GET /api/runs/{run_id}/output` endpoint
+- ✅ Google Chat adapter (webhook + service-account modes)
+- ✅ iMessage adapter (BlueBubbles bridge)
+- ✅ Teams adapter (Bot Framework REST)
+- ✅ Signal adapter + signal_bridge sidecar (signal-cli, encrypted, group support, disappearing messages compliant)
+- ✅ Matrix adapter (polling sync, no sidecar, no AS registration needed)
+- ✅ **All 10 channel adapters complete** — P01 channel scope fully delivered
 
-**Remaining:**
+**Remaining (out-of-P01-scope):**
 - **Cross-message memory**: Fresh AgentLoop4 per message — no multi-turn context (P15 scope)
 - **DM security policy**: Pairing-code flow blocked — no identity layer yet (P12 scope)
 - **Media transcoding**: `MediaAttachment` in envelope; no per-channel format conversion

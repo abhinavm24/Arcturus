@@ -6,6 +6,19 @@ Orchestrates the full inbound/outbound flow:
     Outbound: text → MessageFormatter → ChannelAdapter.send_message()
     Roundtrip: inbound + auto-deliver the agent reply back to the sender
 
+Queue modes
+-----------
+``serial`` (default)
+    Each ``roundtrip()`` call is awaited inline.  Within a session the bus also
+    acquires a per-session ``asyncio.Lock`` so that concurrent callers for the
+    *same* session are serialised (messages are never interleaved).
+
+``parallel``
+    When multiple ``roundtrip()`` calls arrive for *different* sessions they run
+    concurrently via ``asyncio.gather``.  Use ``roundtrip_many()`` to submit a
+    batch.  Within a single session the per-session lock still guarantees serial
+    order, so parallel mode only speeds up *cross-session* throughput.
+
 Usage::
 
     from gateway.bus import MessageBus
@@ -17,22 +30,20 @@ Usage::
     router = MessageRouter(agent_factory=create_mock_agent, formatter=formatter)
     adapters = {"telegram": TelegramAdapter()}
 
+    # Serial mode (default)
     bus = MessageBus(router=router, formatter=formatter, adapters=adapters)
-
-    # Ingest an inbound envelope (agent processes it)
-    result = await bus.ingest(envelope)
-
-    # Deliver an outbound message (format + send)
-    result = await bus.deliver("telegram", "12345678", "**Hello** world!")
-
-    # Full roundtrip (ingest + auto-reply)
     result = await bus.roundtrip(envelope)
+
+    # Parallel mode — process multiple envelopes concurrently
+    bus = MessageBus(router=router, formatter=formatter, adapters=adapters,
+                     queue_mode="parallel")
+    results = await bus.roundtrip_many([env1, env2, env3])
 """
 
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, List, Literal, Optional, Set
 
 from channels.base import ChannelAdapter
 from core.loop import retry_with_backoff
@@ -41,6 +52,8 @@ from gateway.formatter import MessageFormatter
 from gateway.router import MessageRouter
 
 logger = logging.getLogger(__name__)
+
+QueueMode = Literal["serial", "parallel"]
 
 
 @dataclass
@@ -76,6 +89,8 @@ class MessageBus:
     - **Ingest**: Route an inbound MessageEnvelope to the correct agent session.
     - **Deliver**: Format an agent reply and send it via the correct ChannelAdapter.
     - **Roundtrip**: Ingest + auto-deliver the agent's reply in one call.
+    - **Queue mode**: ``serial`` (default) serialises within each session;
+      ``parallel`` allows concurrent dispatch across different sessions.
     """
 
     def __init__(
@@ -83,6 +98,7 @@ class MessageBus:
         router: MessageRouter,
         formatter: MessageFormatter,
         adapters: Dict[str, ChannelAdapter],
+        queue_mode: QueueMode = "serial",
     ):
         """Initialise the MessageBus.
 
@@ -91,11 +107,18 @@ class MessageBus:
             formatter: MessageFormatter that converts text to channel-native format.
             adapters: Mapping of channel name → initialised ChannelAdapter instance.
                       e.g. ``{"telegram": TelegramAdapter(), "webchat": WebChatAdapter()}``
+            queue_mode: ``"serial"`` (default) — each roundtrip awaited inline;
+                        ``"parallel"`` — use ``roundtrip_many()`` to dispatch
+                        multiple envelopes concurrently across sessions.
         """
         self.router = router
         self.formatter = formatter
         self.adapters = adapters
+        self.queue_mode: QueueMode = queue_mode
         self._seen_hashes: Set[str] = set()
+        # Per-session locks ensure messages within a session are always serialised,
+        # regardless of queue_mode.
+        self._session_locks: Dict[str, asyncio.Lock] = {}
 
     async def ingest(self, envelope: MessageEnvelope) -> BusResult:
         """Route an inbound envelope to the appropriate agent.
@@ -214,6 +237,18 @@ class MessageBus:
                 error=str(exc),
             )
 
+    def _session_lock(self, envelope: MessageEnvelope) -> asyncio.Lock:
+        """Return (creating if needed) the per-session asyncio.Lock."""
+        key = (
+            envelope.session_id
+            or envelope.conversation_id
+            or envelope.thread_id
+            or f"{envelope.channel}_{envelope.sender_id}"
+        )
+        if key not in self._session_locks:
+            self._session_locks[key] = asyncio.Lock()
+        return self._session_locks[key]
+
     async def roundtrip(self, envelope: MessageEnvelope) -> BusResult:
         """Ingest an inbound envelope and auto-deliver the agent's reply.
 
@@ -221,44 +256,76 @@ class MessageBus:
         The formatted reply is sent back to the original sender
         (``envelope.sender_id`` on ``envelope.channel``).
 
+        Within a session, the per-session lock serialises concurrent callers so
+        messages are never processed out of order.  In ``"parallel"`` queue mode
+        the lock still guarantees intra-session ordering while allowing
+        *inter-session* concurrency via ``roundtrip_many()``.
+
         Args:
             envelope: Inbound MessageEnvelope.
 
         Returns:
             BusResult from the deliver step (includes ingest data in agent_response).
         """
-        ingest_result = await self.ingest(envelope)
-        if not ingest_result.success:
-            ingest_result.operation = "roundtrip"
-            return ingest_result
+        async with self._session_lock(envelope):
+            ingest_result = await self.ingest(envelope)
+            if not ingest_result.success:
+                ingest_result.operation = "roundtrip"
+                return ingest_result
 
-        reply_text = ""
-        if ingest_result.agent_response:
-            reply_text = ingest_result.agent_response.get("reply", "")
+            reply_text = ""
+            if ingest_result.agent_response:
+                reply_text = ingest_result.agent_response.get("reply", "")
 
-        if not reply_text:
-            # Nothing to deliver; return the ingest result as-is.
-            ingest_result.operation = "roundtrip"
-            return ingest_result
+            if not reply_text:
+                # Nothing to deliver; return the ingest result as-is.
+                ingest_result.operation = "roundtrip"
+                return ingest_result
 
-        # Use the most specific routing key for the reply recipient.
-        # For WebChat, session_id is the outbox key (not raw sender_id).
-        # For Telegram/Slack, conversation_id or sender_id is appropriate.
-        reply_recipient = (
-            envelope.session_id
-            or envelope.conversation_id
-            or envelope.sender_id
-        )
-        deliver_result = await self.deliver(
-            channel=envelope.channel,
-            recipient_id=reply_recipient,
-            text=reply_text,
-        )
-        # Merge ingest metadata into the deliver result for full context.
-        deliver_result.operation = "roundtrip"
-        deliver_result.session_id = ingest_result.session_id
-        deliver_result.agent_response = ingest_result.agent_response
-        return deliver_result
+            # Use the most specific routing key for the reply recipient.
+            # For WebChat, session_id is the outbox key (not raw sender_id).
+            # For Telegram/Slack, conversation_id or sender_id is appropriate.
+            reply_recipient = (
+                envelope.session_id
+                or envelope.conversation_id
+                or envelope.sender_id
+            )
+            deliver_result = await self.deliver(
+                channel=envelope.channel,
+                recipient_id=reply_recipient,
+                text=reply_text,
+            )
+            # Merge ingest metadata into the deliver result for full context.
+            deliver_result.operation = "roundtrip"
+            deliver_result.session_id = ingest_result.session_id
+            deliver_result.agent_response = ingest_result.agent_response
+            return deliver_result
+
+    async def roundtrip_many(
+        self, envelopes: List[MessageEnvelope]
+    ) -> List[BusResult]:
+        """Process multiple envelopes, respecting the configured queue_mode.
+
+        ``serial``: envelopes are processed one at a time in list order.
+        ``parallel``: envelopes from *different* sessions run concurrently via
+        ``asyncio.gather``; envelopes sharing a session are still serialised by
+        the per-session lock.
+
+        Args:
+            envelopes: List of inbound MessageEnvelopes to process.
+
+        Returns:
+            List of BusResults in the same order as *envelopes*.
+        """
+        if self.queue_mode == "parallel":
+            return list(
+                await asyncio.gather(*(self.roundtrip(env) for env in envelopes))
+            )
+        # Serial: process one at a time in order
+        results = []
+        for env in envelopes:
+            results.append(await self.roundtrip(env))
+        return results
 
     async def shutdown(self) -> None:
         """Gracefully shut down the router and all registered adapters."""

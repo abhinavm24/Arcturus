@@ -39,6 +39,7 @@ class MessageFormatter:
         "imessage": "_format_plain",  # iMessage renders plain text natively
         "teams": "_format_teams",
         "signal": "_format_plain",  # Signal renders plain text natively
+        "matrix": "_format_plain",  # Matrix clients render Markdown client-side
     }
 
     def format(self, text: str, channel: str, **kwargs) -> str:

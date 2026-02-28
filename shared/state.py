@@ -183,6 +183,7 @@ def get_message_bus():
         from channels.imessage import iMessageAdapter
         from channels.teams import TeamsAdapter
         from channels.signal import SignalAdapter
+        from channels.matrix import MatrixAdapter
         formatter = MessageFormatter()
         group_activation = _load_group_activation()
         router = MessageRouter(
@@ -190,6 +191,7 @@ def get_message_bus():
             formatter=formatter,
             group_activation=group_activation,
         )
+        matrix_adapter = MatrixAdapter()
         _message_bus = MessageBus(
             router=router,
             formatter=formatter,
@@ -203,8 +205,11 @@ def get_message_bus():
                 "imessage": iMessageAdapter(),
                 "teams": TeamsAdapter(),
                 "signal": SignalAdapter(),
+                "matrix": matrix_adapter,
             },
         )
+        # Wire Matrix polling loop into the bus for inbound message delivery
+        matrix_adapter.set_bus_callback(_message_bus.roundtrip)
     return _message_bus
 
 # Canvas components

@@ -145,6 +145,27 @@ channels:
       max_retries: 3
       retry_backoff_seconds: 1.0
 
+  # Matrix — connects to any Matrix homeserver (matrix.org, Element, self-hosted Synapse)
+  # No sidecar needed — adapter polls GET /_matrix/client/v3/sync internally every N seconds.
+  # Setup: create a bot account on any homeserver, obtain an access token via /login.
+  matrix:
+    enabled: true
+    # Homeserver base URL (e.g. https://matrix.org or https://your.homeserver.tld)
+    homeserver_url_env: MATRIX_HOMESERVER_URL
+    # Bot's full Matrix user ID (e.g. @arcturus:matrix.org)
+    user_id_env: MATRIX_USER_ID
+    # Bot's access token (Bearer auth for Matrix CS API)
+    access_token_env: MATRIX_ACCESS_TOKEN
+    # Seconds between /sync polls (0-2s inbound latency)
+    sync_interval_seconds: 2.0
+    # Matrix clients render their own Markdown; we send plain text
+    parse_mode: plain
+    policies:
+      group_activation: mention-only
+      dm_allowlist: []
+      max_retries: 3
+      retry_backoff_seconds: 1.0
+
 # Global routing defaults (overridden per channel above)
 routing:
   default_queue_mode: serial   # "serial" | "parallel"

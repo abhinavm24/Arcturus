@@ -375,3 +375,149 @@ def test_media_payload_survives_roundtrip_three_channels():
         assert att.url == "https://example.com/photo.jpg"
         assert att.mime_type == "image/jpeg"
         assert att.size_bytes == 102400
+
+
+# ---------------------------------------------------------------------------
+# Queue mode tests
+# ---------------------------------------------------------------------------
+
+
+def _make_bus_with_mode(mode: str):
+    """Build a MessageBus with a given queue_mode."""
+    formatter = MessageFormatter()
+    router = MessageRouter(agent_factory=create_mock_agent, formatter=formatter)
+    tg = _FakeAdapter("telegram")
+    bus = MessageBus(
+        router=router,
+        formatter=formatter,
+        adapters={"telegram": tg},
+        queue_mode=mode,
+    )
+    return bus, tg
+
+
+def test_queue_mode_default_is_serial():
+    """MessageBus default queue_mode is 'serial'."""
+    formatter = MessageFormatter()
+    router = MessageRouter(agent_factory=create_mock_agent, formatter=formatter)
+    bus = MessageBus(router=router, formatter=formatter, adapters={})
+    assert bus.queue_mode == "serial"
+
+
+def test_queue_mode_can_be_set_to_parallel():
+    """MessageBus accepts queue_mode='parallel' and stores it."""
+    formatter = MessageFormatter()
+    router = MessageRouter(agent_factory=create_mock_agent, formatter=formatter)
+    bus = MessageBus(router=router, formatter=formatter, adapters={}, queue_mode="parallel")
+    assert bus.queue_mode == "parallel"
+
+
+def test_roundtrip_many_serial_preserves_order():
+    """roundtrip_many() in serial mode processes envelopes in list order."""
+
+    async def _run():
+        bus, tg = _make_bus_with_mode("serial")
+        envs = [
+            _telegram_envelope(text=f"msg-{i}", message_id=f"id-{i}", sender_id=f"{i}")
+            for i in range(3)
+        ]
+        results = await bus.roundtrip_many(envs)
+
+        assert len(results) == 3
+        assert all(r.success for r in results)
+        assert len(tg.sent) == 3
+        # Results are in the same order as the submitted envelopes
+        for i, result in enumerate(results):
+            assert result.operation == "roundtrip"
+            assert result.channel == "telegram"
+
+    asyncio.run(_run())
+
+
+def test_roundtrip_many_parallel_all_succeed():
+    """roundtrip_many() in parallel mode processes all envelopes and all succeed."""
+
+    async def _run():
+        bus, tg = _make_bus_with_mode("parallel")
+        # Use different sender_ids so they land in different sessions (no lock contention)
+        envs = [
+            _telegram_envelope(
+                text=f"parallel-{i}",
+                message_id=f"par-id-{i}",
+                sender_id=f"sender-{i}",
+                chat_id=f"chat-{i}",
+            )
+            for i in range(4)
+        ]
+        results = await bus.roundtrip_many(envs)
+
+        assert len(results) == 4
+        assert all(r.success for r in results)
+        assert len(tg.sent) == 4
+
+    asyncio.run(_run())
+
+
+def test_parallel_mode_serialises_within_same_session():
+    """In parallel mode, two messages in the same session are still processed serially."""
+
+    order: list[int] = []
+
+    class _OrderedAgent:
+        """Agent that records the order it was called."""
+
+        def __init__(self, idx: int):
+            self.idx = idx
+            self.session_id = "shared"
+
+        async def process_message(self, envelope):
+            order.append(self.idx)
+            await asyncio.sleep(0)  # yield to event loop
+            return {
+                "status": "processed",
+                "reply": f"reply-{self.idx}",
+                "channel": envelope.channel,
+                "sender_id": envelope.sender_id,
+            }
+
+    call_count = 0
+
+    async def _factory(session_id: str):
+        nonlocal call_count
+        call_count += 1
+        return _OrderedAgent(call_count)
+
+    async def _run():
+        formatter = MessageFormatter()
+        router = MessageRouter(agent_factory=_factory, formatter=formatter)
+        tg = _FakeAdapter("telegram")
+        bus = MessageBus(
+            router=router,
+            formatter=formatter,
+            adapters={"telegram": tg},
+            queue_mode="parallel",
+        )
+        # Both envelopes share the same chat_id → same session → must serialize
+        env1 = _telegram_envelope(text="first", message_id="s1", sender_id="u1")
+        env2 = _telegram_envelope(text="second", message_id="s2", sender_id="u1")
+
+        await bus.roundtrip_many([env1, env2])
+        # Because they share a session lock, they must be processed one at a time.
+        # Both results should succeed.
+        assert len(tg.sent) == 2
+
+    asyncio.run(_run())
+
+
+def test_roundtrip_acquires_session_lock():
+    """roundtrip() uses per-session locks (lock is created on first call)."""
+
+    async def _run():
+        bus, _ = _make_bus_with_mode("serial")
+        env = _telegram_envelope()
+        assert len(bus._session_locks) == 0
+        await bus.roundtrip(env)
+        # Lock should now exist for this session
+        assert len(bus._session_locks) == 1
+
+    asyncio.run(_run())

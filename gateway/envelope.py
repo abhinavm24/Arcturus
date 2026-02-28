@@ -484,6 +484,53 @@ class MessageEnvelope:
             },
         )
 
+    @classmethod
+    def from_matrix(
+        cls,
+        room_id: str,
+        sender_id: str,
+        sender_name: str,
+        text: str,
+        event_id: str,
+        is_direct: bool = False,
+        is_bot: bool = False,
+        **kwargs,
+    ) -> "MessageEnvelope":
+        """Create a MessageEnvelope from a Matrix m.room.message event.
+
+        Args:
+            room_id: Matrix room ID (``!roomId:homeserver``).
+            sender_id: Sender's full Matrix user ID (``@user:homeserver``).
+            sender_name: Sender's display name or user ID.
+            text: Message body text.
+            event_id: Matrix event ID (globally unique, ``$eventId:homeserver``).
+            is_direct: Whether the room is a direct message room.
+            is_bot: Whether the sender is a bot.
+            **kwargs: Additional metadata to store.
+
+        Returns:
+            MessageEnvelope instance.
+        """
+        # Extract homeserver domain from sender_id (@user:homeserver → homeserver)
+        homeserver = sender_id.split(":", 1)[1] if ":" in sender_id else ""
+        return cls(
+            channel="matrix",
+            channel_message_id=event_id,
+            sender_id=sender_id,
+            sender_name=sender_name,
+            content=cls.normalize_text(text),
+            thread_id=room_id,
+            conversation_id=room_id,
+            sender_is_bot=is_bot,
+            metadata={
+                "room_id": room_id,
+                "sender_id": sender_id,
+                "homeserver": homeserver,
+                "is_direct": is_direct,
+                **kwargs,
+            },
+        )
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert envelope to dictionary for serialization."""
         return {
