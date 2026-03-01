@@ -32,10 +32,10 @@ def retrieve(
     """
     Retrieve and merge memories for a query.
 
-    Flow:
-    1. Semantic recall (Qdrant vector search)
-    2. Entity recall (NER on query → resolve against graph → expand)
-    3. Graph expansion (from semantic results' entity_ids)
+    Flow (entity recall runs INDEPENDENTLY of semantic — rescues when vector search returns 0):
+    1. Semantic recall (Qdrant vector search) — may return []
+    2. Entity recall (NER → resolve → expand) — always runs when kg enabled, regardless of semantic
+    3. Graph expansion (from semantic results' entity_ids) — only when semantic had entity_ids
     4. Merge + return formatted context
 
     Returns (memory_context: str, semantic_results: List) for agent injection and extraction.
@@ -47,8 +47,9 @@ def retrieve(
     store = store or _get_store()
     user_id = user_id or _get_user_id() or ""
     result_ids: set = set()
+    memory_context = ""
 
-    # 1. Semantic recall
+    # 1. Semantic recall (may return 0 — graph recall will still run)
     semantic_results = _semantic_recall(query, store, k=semantic_k)
     if semantic_results:
         top = semantic_results[:top_for_context]
@@ -57,24 +58,21 @@ def retrieve(
             [f"- {r['text']} (Confidence: {r.get('score', 0):.2f})" for r in top]
         )
         memory_context = f"PREVIOUS MEMORIES ABOUT USER:\n{memory_str}\n"
-    else:
-        memory_context = ""
 
-    # 2. Graph expansion (from semantic results) + 3. Entity recall
+    # 2. Entity recall — INDEPENDENT of semantic. Runs whenever kg enabled, even if semantic returned 0.
     kg = _get_knowledge_graph()
     if kg and kg.enabled:
-        # 2a. Graph expansion from entity_ids in semantic results
-        entity_ids = []
-        for r in semantic_results:
-            entity_ids.extend(r.get("entity_ids") or [])
-        if entity_ids:
-            expanded = kg.expand_from_entities(entity_ids, user_id=user_id)
-            memory_context = _append_graph_expansion(memory_context, expanded, store, result_ids)
+        entity_recall_ids = _entity_recall(query, user_id, kg)
+        if entity_recall_ids:
+            memory_context = _append_entity_memories(memory_context, entity_recall_ids, store, result_ids)
 
-        # 3. Entity recall: NER on query → resolve → expand
-        entity_first_ids = _entity_recall(query, user_id, kg)
-        if entity_first_ids:
-            memory_context = _append_entity_memories(memory_context, entity_first_ids, store, result_ids)
+        # 3. Graph expansion from semantic entity_ids (only when semantic had results with entity_ids)
+        entity_ids_from_semantic = []
+        for r in semantic_results:
+            entity_ids_from_semantic.extend(r.get("entity_ids") or [])
+        if entity_ids_from_semantic:
+            expanded = kg.expand_from_entities(entity_ids_from_semantic, user_id=user_id)
+            memory_context = _append_graph_expansion(memory_context, expanded, store, result_ids)
 
     return memory_context, semantic_results
 
