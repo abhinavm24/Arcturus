@@ -6,9 +6,10 @@ process.title = "Arcturus";
 
 const path = require('path');
 const isDev = !app.isPackaged;
-const { spawn } = require('child_process');
+const { spawn, execFileSync } = require('child_process');
 const os = require('os');
 const fs = require('fs');
+const treeKill = require('tree-kill');
 
 // Try to load node-pty
 let pty;
@@ -1163,7 +1164,13 @@ app.on('activate', () => {
     }
 });
 
-const treeKill = require('tree-kill');
+function killProcessTree(pid) {
+    const numericPid = Number(pid);
+    if (!Number.isInteger(numericPid) || numericPid <= 0) return;
+    treeKill(numericPid, 'SIGKILL', (err) => {
+        if (err) console.warn(`[Arcturus] Failed to kill process tree ${numericPid}:`, err.message);
+    });
+}
 
 app.on('will-quit', () => {
     console.log('[Arcturus] Shutting down backends and terminal sessions...');
@@ -1171,30 +1178,22 @@ app.on('will-quit', () => {
     // Kill backend services
     backendProcesses.forEach(proc => {
         if (proc && proc.pid) {
-            console.log(`[Arcturus] Killing backend process ${proc.pid}`);
-            treeKill(proc.pid, 'SIGKILL', (err) => {
-                if (err) console.error(`[Arcturus] Failed to kill process ${proc.pid}`, err);
-            });
+            console.log(`[Arcturus] Killing backend process tree ${proc.pid}`);
+            killProcessTree(proc.pid);
         }
     });
 
     // Kill background shell tasks
     backgroundProcesses.forEach((proc, pidKey) => {
         if (proc && proc.pid && proc.status === 'running') {
-            console.log(`[Arcturus] Killing background task ${proc.pid}`);
-            treeKill(proc.pid, 'SIGKILL');
+            console.log(`[Arcturus] Killing background task tree ${proc.pid}`);
+            killProcessTree(proc.pid);
         }
     });
 
     // Kill PTY
     if (ptyProcess && ptyProcess.pid) {
         console.log(`[Arcturus] Killing PTY ${ptyProcess.pid}`);
-        try {
-            // ptyProcess from node-pty might need standard kill or tree-kill
-            // tree-kill is safer
-            treeKill(ptyProcess.pid, 'SIGKILL');
-        } catch (e) {
-            console.error('[Arcturus] Failed to kill PTY', e);
-        }
+        killProcessTree(ptyProcess.pid);
     }
 });
