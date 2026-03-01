@@ -207,20 +207,34 @@ async def process_run(run_id: str, query: str):
                                         for f in expanded["user_facts"][:5]
                                     )
                                     memory_context += f"\nUSER FACTS (from knowledge graph): {facts_str}\n"
-                            # Entity-first path: query mentions (e.g. "John", "office") -> Neo4j memories
-                            import re
-                            _stop = {
-                                "the", "a", "an", "is", "are", "was", "were", "do", "does", "did",
-                                "you", "your", "have", "has", "had", "any", "about", "of", "our",
-                                "to", "what", "we", "in", "with", "from", "for", "and", "or", "but",
-                                "so", "how", "when", "where", "why", "this", "that", "these", "those",
-                                "can", "could", "would", "should", "me", "my", "at", "next", "week",
-                            }
-                            query_words = [w for w in re.findall(r"\b\w+\b", query) if w.lower() not in _stop and len(w) > 1]
-                            if query_words:
-                                entity_first_ids = kg.get_memory_ids_for_entity_names(get_user_id() or "", query_words)
+                            # Entity-first path: NER on query -> resolve against graph (exact + fuzzy) -> expand
+                            _entity_first_ids: list[str] = []
+                            try:
+                                from memory.entity_extractor import EntityExtractor
+                                entities = EntityExtractor().extract_from_query(query)
+                                if entities:
+                                    resolved_ids = kg.resolve_entity_candidates(get_user_id() or "", entities, fuzzy_threshold=0.85)
+                                    if resolved_ids:
+                                        expanded_ef = kg.expand_from_entities(resolved_ids, user_id=get_user_id(), depth=2)
+                                        _entity_first_ids = expanded_ef.get("memory_ids", [])
+                            except Exception:
+                                pass
+                            # Fallback: stop-word heuristic if NER returns nothing
+                            if not _entity_first_ids:
+                                import re
+                                _stop = {
+                                    "the", "a", "an", "is", "are", "was", "were", "do", "does", "did",
+                                    "you", "your", "have", "has", "had", "any", "about", "of", "our",
+                                    "to", "what", "we", "in", "with", "from", "for", "and", "or", "but",
+                                    "so", "how", "when", "where", "why", "this", "that", "these", "those",
+                                    "can", "could", "would", "should", "me", "my", "at", "next", "week",
+                                }
+                                query_words = [w for w in re.findall(r"\b\w+\b", query) if w.lower() not in _stop and len(w) > 1]
+                                if query_words:
+                                    _entity_first_ids = kg.get_memory_ids_for_entity_names(get_user_id() or "", query_words)
+                            if _entity_first_ids:
                                 entity_first_texts = []
-                                for mid in entity_first_ids[:5]:
+                                for mid in _entity_first_ids[:5]:
                                     if mid not in result_ids:
                                         result_ids.add(mid)
                                         m = remme_store.get(mid)

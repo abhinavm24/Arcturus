@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from core.utils import log_error, log_step
 
@@ -423,15 +423,103 @@ class KnowledgeGraph:
             "user_facts": user_facts,
         }
 
+    def get_entities_for_user(self, user_id: str) -> List[Dict[str, Any]]:
+        """Get all entities in the user's graph (from their memories)."""
+        if not self._enabled or not user_id:
+            return []
+        records = self._run_query(
+            """
+            MATCH (u:User {user_id: $user_id})-[:HAS_MEMORY]->(m:Memory)-[:CONTAINS_ENTITY]->(e:Entity)
+            RETURN DISTINCT e.id AS id, e.type AS type, e.name AS name
+            """,
+            {"user_id": user_id},
+        )
+        return records
+
+    def resolve_entity_candidates(
+        self,
+        user_id: str,
+        candidates: List[Dict[str, str]],
+        fuzzy_threshold: float = 0.85,
+    ) -> List[str]:
+        """
+        Resolve NER-extracted candidates against the graph.
+        Lookup order: exact match (type+name), then fuzzy (threshold default 0.85).
+        Returns list of entity ids for matched candidates.
+        """
+        if not self._enabled or not user_id or not candidates:
+            return []
+        graph_entities = self.get_entities_for_user(user_id)
+        if not graph_entities:
+            return []
+        # Build lookup: (type_lower, name_lower) -> entity_id
+        exact_map: Dict[Tuple[str, str], str] = {}
+        by_type: Dict[str, List[Tuple[str, str]]] = {}  # type -> [(name, id)]
+        for e in graph_entities:
+            eid = e.get("id")
+            etype = (e.get("type") or "").strip().lower()
+            ename = (e.get("name") or "").strip().lower()
+            if not eid or not ename:
+                continue
+            exact_map[(etype, ename)] = eid
+            by_type.setdefault(etype, []).append((ename, eid))
+        # Also index generic "entity" / "concept" etc. for cross-type fallback
+        all_names: List[Tuple[str, str]] = [(e.get("name", "").lower().strip(), e.get("id", "")) for e in graph_entities if e.get("name") and e.get("id")]
+
+        resolved: List[str] = []
+        try:
+            from rapidfuzz import fuzz
+        except ImportError:
+            # Fallback: exact only
+            for c in candidates:
+                ctype = (c.get("type") or "").strip().lower() or "concept"
+                cname = (c.get("name") or "").strip().lower()
+                if not cname:
+                    continue
+                eid = exact_map.get((ctype, cname))
+                if not eid:
+                    eid = exact_map.get(("concept", cname))
+                if eid and eid not in resolved:
+                    resolved.append(eid)
+            return resolved
+
+        threshold_int = int(fuzzy_threshold * 100)
+        for c in candidates:
+            ctype = (c.get("type") or "").strip().lower() or "concept"
+            cname = (c.get("name") or "").strip().lower()
+            if not cname:
+                continue
+            # 1. Exact match
+            eid = exact_map.get((ctype, cname))
+            if not eid:
+                eid = exact_map.get(("concept", cname))
+            if eid:
+                if eid not in resolved:
+                    resolved.append(eid)
+                continue
+            # 2. Fuzzy match
+            best_score = 0
+            best_id: Optional[str] = None
+            candidates_fuzzy = by_type.get(ctype, []) + ([] if ctype in by_type else all_names)
+            for ename, eid in candidates_fuzzy:
+                if not ename:
+                    continue
+                score = fuzz.ratio(cname, ename)
+                if score >= threshold_int and score > best_score:
+                    best_score = score
+                    best_id = eid
+            if best_id and best_id not in resolved:
+                resolved.append(best_id)
+        return resolved
+
     def get_memory_ids_for_entity_names(
         self,
         user_id: str,
         names: List[str],
     ) -> List[str]:
         """
-        Entity-first retrieval: find memory ids that contain entities whose name
-        matches any of the given names (case-insensitive). Scoped to user.
-        Used when semantic search returns little; pull memories by entity mention.
+        Fallback: find memory ids by raw name tokens (stop-word style).
+        Use resolve_entity_candidates + expand_from_entities for NER-based retrieval.
         """
         if not self._enabled or not names:
             return []

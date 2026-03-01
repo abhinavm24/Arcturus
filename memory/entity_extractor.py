@@ -58,6 +58,36 @@ class EntityExtractor:
             )
         return self._prompt
 
+    def extract_from_query(self, query: str) -> List[Dict[str, str]]:
+        """
+        Extract entities from a short query (NER-style) for entity-first retrieval.
+        Uses a lighter prompt optimized for queries. Returns entities only.
+        Example: {"entities": [{"name": "John", "type": "Person"}]}
+        """
+        prompt = "Extract only entity names and types mentioned. Return JSON: {entities: [{name, type}]}. Types: Person, Company, City, Place, Concept, Date, etc."
+        try:
+            user_msg = f"Query: {query}\nReturn ONLY valid JSON, no markdown."
+            response = requests.post(
+                self.api_url,
+                json={
+                    "model": self.model,
+                    "messages": [
+                        {"role": "system", "content": prompt},
+                        {"role": "user", "content": user_msg},
+                    ],
+                    "stream": False,
+                    "options": {"temperature": 0.0},
+                },
+                timeout=get_timeout(),
+            )
+            response.raise_for_status()
+            result = response.json()
+            content = result.get("message", {}).get("content", "{}")
+            parsed = self._parse(content)
+            return parsed.get("entities", [])
+        except Exception:
+            return []
+
     def extract(self, text: str, verbose: bool = False) -> Dict[str, Any]:
         """
         Extract entities and relationships from memory text.
