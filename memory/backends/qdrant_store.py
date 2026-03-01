@@ -113,6 +113,37 @@ class QdrantVectorStore:
                 else:
                     log_error(f"Failed to create payload index for {field}: {e}")
 
+    def _ingest_to_knowledge_graph(self, memory_id: str, text: str, payload: Dict[str, Any]) -> None:
+        """Extract entities, write to Neo4j, update Qdrant payload with entity_ids."""
+        try:
+            from memory.knowledge_graph import get_knowledge_graph
+            from memory.entity_extractor import EntityExtractor
+
+            kg = get_knowledge_graph()
+            if not kg or not kg.enabled:
+                return
+            user_id = payload.get(self._tenant_keyword_field) or self._user_id
+            if not user_id:
+                return
+            session_id = payload.get("session_id") or "unknown"
+            extractor = EntityExtractor()
+            extracted = extractor.extract(text)
+            entity_ids = kg.ingest_memory(
+                memory_id=memory_id,
+                text=text,
+                user_id=user_id,
+                session_id=session_id,
+                category=payload.get("category", "general"),
+                source=payload.get("source", "manual"),
+                entities=extracted.get("entities"),
+                entity_relationships=extracted.get("entity_relationships"),
+                user_facts=extracted.get("user_facts"),
+            )
+            if entity_ids:
+                self.update(memory_id, metadata={"entity_ids": entity_ids})
+        except Exception as e:
+            log_error(f"Knowledge graph ingestion failed: {e}")
+
     def _tenant_filter(self, filter_metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Merge tenant user_id into filter metadata."""
         base: Dict[str, Any] = {self._tenant_keyword_field: self._user_id} if self._is_tenant and self._user_id else {}
@@ -128,6 +159,7 @@ class QdrantVectorStore:
         source: str = "manual",
         metadata: Optional[Dict[str, Any]] = None,
         deduplication_threshold: float = 0.15,
+        session_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         embedding_list = embedding.tolist() if isinstance(embedding, np.ndarray) else list(embedding)
         if deduplication_threshold > 0:
@@ -152,12 +184,22 @@ class QdrantVectorStore:
         }
         if self._is_tenant and self._user_id:
             payload[self._tenant_keyword_field] = self._user_id
+        if session_id:
+            payload["session_id"] = session_id
+        elif metadata and metadata.get("session_id"):
+            payload["session_id"] = metadata["session_id"]
+        elif source and source.startswith("run_"):
+            payload["session_id"] = source.replace("run_", "")
         if metadata:
             payload.update(metadata)
 
         point = PointStruct(id=memory_id, vector=embedding_list, payload=payload)
         self.client.upsert(collection_name=self.collection_name, points=[point])
         log_step(f"💾 Added memory: {memory_id[:8]}... ({len(text)} chars)", symbol="📝")
+
+        # Neo4j knowledge graph ingestion (if enabled)
+        self._ingest_to_knowledge_graph(memory_id, text, payload)
+
         return {"id": memory_id, **payload}
 
     def search(

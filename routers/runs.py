@@ -6,7 +6,6 @@ from datetime import datetime
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Body
 from pydantic import BaseModel
 from typing import Optional
-
 from ops.tracing import run_span, agent_execute_node_span
 from opentelemetry.trace import Status, StatusCode
 
@@ -160,6 +159,25 @@ async def process_run(run_id: str, query: str):
                 if results:
                     memory_str = "\n".join([f"- {r['text']} (Confidence: {r.get('score', 0):.2f})" for r in results])
                     memory_context = f"PREVIOUS MEMORIES ABOUT USER:\n{memory_str}\n"
+                    # Neo4j knowledge graph expansion (if enabled)
+                    try:
+                        from memory.knowledge_graph import get_knowledge_graph
+                        from memory.user_id import get_user_id
+                        kg = get_knowledge_graph()
+                        if kg and kg.enabled:
+                            entity_ids = []
+                            for r in results:
+                                entity_ids.extend(r.get("entity_ids") or [])
+                            if entity_ids:
+                                expanded = kg.expand_from_entities(entity_ids, user_id=get_user_id())
+                                if expanded.get("user_facts"):
+                                    facts_str = ", ".join(
+                                        f"{f.get('rel_type', '')}({f.get('name', '')})"
+                                        for f in expanded["user_facts"][:5]
+                                    )
+                                    memory_context += f"\nUSER FACTS (from knowledge graph): {facts_str}\n"
+                    except Exception:
+                        pass
                     print(f" Remme: Injected {len(results)} memories into run {run_id}")
             except Exception as e:
                 print(f"⚠️ Remme Retrieval Failed: {e}")
@@ -243,7 +261,10 @@ async def process_run(run_id: str, query: str):
                         try:
                             if action == "add" and text:
                                 emb = get_embedding(text, task_type="search_document")
-                                remme_store.add(text, emb, category="derived", source=f"run_{run_id}")
+                                remme_store.add(
+                                    text, emb, category="derived", source=f"run_{run_id}",
+                                    metadata={"session_id": run_id},
+                                )
                                 print(f"✅ Remme: Added new fact: {text}")
                             elif action == "update" and target_id and text:
                                 emb = get_embedding(text, task_type="search_document")

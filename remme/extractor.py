@@ -13,7 +13,6 @@ import json
 import sys
 from typing import List, Dict, Tuple, Optional
 from pathlib import Path
-import pdb
 # Add project root to path and import settings
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config.settings_loader import settings, get_ollama_url, get_model, get_timeout
@@ -82,9 +81,6 @@ EXISTING RELEVANT MEMORIES:
 {memories_str}
 """
 
-        print(f"[DEBUG] RemMe Target Model: {self.model}")
-        pdb.set_trace()
-        
         try:
             response = requests.post(
                 self.api_url,
