@@ -269,6 +269,7 @@ class MessageBus:
         """
         async with self._session_lock(envelope):
             ingest_result = await self.ingest(envelope)
+            print(f"[BUS] ingest done: success={ingest_result.success} agent_response={type(ingest_result.agent_response).__name__}={ingest_result.agent_response}")
             if not ingest_result.success:
                 ingest_result.operation = "roundtrip"
                 return ingest_result
@@ -277,6 +278,7 @@ class MessageBus:
             if ingest_result.agent_response:
                 reply_text = ingest_result.agent_response.get("reply", "")
 
+            print(f"[BUS] reply_text ({len(reply_text)} chars): {reply_text[:120] if reply_text else '(empty)'}")
             if not reply_text:
                 # Nothing to deliver; return the ingest result as-is.
                 ingest_result.operation = "roundtrip"

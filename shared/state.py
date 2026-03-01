@@ -1,6 +1,7 @@
 # Shared State Module
 # This module holds global state that is shared across all routers
 
+import logging as _logging
 import threading
 from pathlib import Path
 
@@ -191,12 +192,13 @@ def get_message_bus():
             formatter=formatter,
             group_activation=group_activation,
         )
+        telegram_adapter = TelegramAdapter()
         matrix_adapter = MatrixAdapter()
         _message_bus = MessageBus(
             router=router,
             formatter=formatter,
             adapters={
-                "telegram": TelegramAdapter(),
+                "telegram": telegram_adapter,
                 "webchat": WebChatAdapter(),
                 "slack": SlackAdapter(),
                 "discord": DiscordAdapter(),
@@ -208,9 +210,29 @@ def get_message_bus():
                 "matrix": matrix_adapter,
             },
         )
-        # Wire Matrix polling loop into the bus for inbound message delivery
+        # Wire inbound polling loops into the bus for message delivery
+        telegram_adapter.set_bus_callback(_message_bus.roundtrip)
         matrix_adapter.set_bus_callback(_message_bus.roundtrip)
     return _message_bus
+
+
+_bus_logger = _logging.getLogger(__name__)
+
+
+async def initialize_message_bus() -> None:
+    """Initialize all channel adapters (creates httpx clients, starts polling loops).
+
+    Must be called from an async context (e.g. FastAPI lifespan startup) after
+    get_message_bus() has constructed the bus.  Safe to call multiple times —
+    adapters that are already initialized are skipped gracefully.
+    """
+    bus = get_message_bus()
+    for name, adapter in bus.adapters.items():
+        try:
+            await adapter.initialize()
+            _bus_logger.info("Nexus adapter '%s' initialized", name)
+        except Exception as exc:
+            _bus_logger.warning("Nexus adapter '%s' failed to initialize: %s", name, exc)
 
 # Canvas components
 _canvas_ws = None

@@ -157,7 +157,14 @@ async def lifespan(app: FastAPI):
         print("⚠️ Ollama NOT found.")
     # 🧠 Start Smart Sync in background
     asyncio.create_task(background_smart_scan())
-    
+
+    # 4. Initialize Nexus gateway adapters (creates httpx clients, Telegram polling, etc.)
+    try:
+        from shared.state import initialize_message_bus
+        await initialize_message_bus()
+    except Exception as e:
+        print(f"⚠️ [Nexus] Message bus initialization failed: {e}")
+
     yield
     
     print("🛑 API Shutting down...")

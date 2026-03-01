@@ -12,10 +12,12 @@ channels:
     # Env-var that holds the Telegram Bot API token
     token_env: TELEGRAM_TOKEN
     # Default parse mode for outbound messages
-    parse_mode: MarkdownV2
+    parse_mode: plain
     policies:
       # "mention-only" | "always-on"
-      group_activation: mention-only
+      # DMs to the bot don't contain @mentions, so always-on is required.
+      # For group chats, mention-only can be configured separately (future).
+      group_activation: always-on
       # Allowlist of numeric Telegram user IDs that may DM the bot.
       # Empty list = open (anyone can DM).
       dm_allowlist: []

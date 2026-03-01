@@ -4,12 +4,8 @@ Routes normalized MessageEnvelopes to the appropriate agent instances
 based on channel, conversation ID, and session affinity policies.
 """
 
-import asyncio
 import logging
-import os
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
-
-import httpx
 
 from gateway.envelope import MessageEnvelope
 
@@ -109,9 +105,11 @@ class MessageRouter:
 
         # Get or create agent instance for this session
         agent = await self._get_or_create_agent(session_id)
+        print(f"[ROUTER] agent type: {type(agent).__name__} for session {session_id}")
 
         # Process message through agent
         result = await self._process_message(agent, envelope)
+        print(f"[ROUTER] _process_message returned: {str(result)[:200]}")
 
         # Format the reply text for the envelope's channel if a formatter is wired in
         if self.formatter and isinstance(result, dict) and "reply" in result:
@@ -237,109 +235,152 @@ async def create_mock_agent(session_id: str) -> Any:
 # Real-agent factory — backed by AgentLoop4 via /api/runs
 # ---------------------------------------------------------------------------
 
-# Configurable via env; default assumes co-located FastAPI server
-_ARCTURUS_BASE_URL = os.getenv("ARCTURUS_BASE_URL", "http://localhost:8000")
-_POLL_INTERVAL_S = 2.0    # seconds between GET /output polls
-_POLL_TIMEOUT_S = 120.0   # total wait before giving up
+
+async def _fetch_run_output(run_id: str) -> dict:
+    """Read run output directly from the session summary on disk."""
+    import json as _json
+    from shared.state import PROJECT_ROOT
+
+    summaries_dir = PROJECT_ROOT / "memory" / "session_summaries_index"
+    for session_file in summaries_dir.rglob(f"session_{run_id}.json"):
+        try:
+            data = _json.loads(session_file.read_text())
+            graph = data.get("graph", {})
+            status = graph.get("status", "unknown")
+            # nodes live at top-level data["nodes"], not inside "graph"
+            nodes = data.get("nodes", [])
+            output_text = None
+            for node in reversed(nodes):
+                # nx.node_link_data() puts attributes directly on node dict
+                raw = node.get("output")
+                if raw:
+                    # Output may be a dict (e.g. {"markdown_report": "..."}) or a string
+                    if isinstance(raw, dict):
+                        output_text = (
+                            raw.get("markdown_report")
+                            or raw.get("report")
+                            or raw.get("text")
+                            or raw.get("content")
+                            or str(raw)
+                        )
+                    else:
+                        output_text = str(raw)
+                    break
+            return {"run_id": run_id, "status": status, "output": output_text}
+        except Exception:
+            pass
+    return {"run_id": run_id, "status": "failed", "output": None}
 
 
 async def create_runs_agent(session_id: str) -> Any:
-    """Factory that creates an agent backed by the real AgentLoop4 via /api/runs.
+    """Factory that creates an agent backed by the real AgentLoop4 (in-process).
 
-    The returned agent object calls ``POST /api/runs`` for each message and
-    polls ``GET /api/runs/{run_id}/output`` until the run completes or times
-    out, then returns the extracted text reply.
+    Calls ``routers.runs.process_run`` directly instead of going over HTTP,
+    which avoids self-request deadlocks when the gateway runs inside the same
+    uvicorn process.
 
     Known limitation: each call starts a *fresh* AgentLoop4 run — there is no
     cross-message conversation memory.  This is a documented P01 known gap;
     persistent session continuity requires deeper runs-API changes (P15 scope).
-
-    Args:
-        session_id: Nexus session identifier (not forwarded to runs API yet).
-
-    Returns:
-        RunsAgentAdapter with ``process_message(envelope) -> Dict`` method.
     """
 
+    # Maximum conversation turns to keep (user + assistant pairs)
+    _MAX_HISTORY_TURNS = 10
+
     class RunsAgentAdapter:
-        """Adapter that delegates to AgentLoop4 via the /api/runs HTTP API."""
+        """Adapter that delegates to AgentLoop4 via direct in-process call.
+
+        Maintains a rolling conversation history so follow-up questions have
+        context from earlier turns.  The history is prepended to the query
+        as a ``CONVERSATION HISTORY`` block that the PlannerAgent sees.
+        """
 
         def __init__(self, session_id: str):
             self.session_id = session_id
+            self._history: list[dict[str, str]] = []  # [{"role": "user"|"assistant", "content": ...}, ...]
+
+        def _build_contextual_query(self, current_message: str) -> str:
+            """Prepend conversation history to the current message."""
+            if not self._history:
+                return current_message
+
+            lines = ["CONVERSATION HISTORY (most recent messages):"]
+            for turn in self._history:
+                role = turn["role"].upper()
+                lines.append(f"  {role}: {turn['content']}")
+            lines.append("")
+            lines.append(f"CURRENT USER MESSAGE: {current_message}")
+            lines.append("")
+            lines.append("Answer the CURRENT USER MESSAGE. Use the conversation history for context if the user refers to previous topics.")
+            return "\n".join(lines)
+
+        def _trim_history(self):
+            """Keep only the last N turns to avoid unbounded growth."""
+            max_items = _MAX_HISTORY_TURNS * 2  # user + assistant per turn
+            if len(self._history) > max_items:
+                self._history = self._history[-max_items:]
 
         async def process_message(self, envelope: MessageEnvelope) -> Dict[str, Any]:
-            base = _ARCTURUS_BASE_URL
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                # 1. Submit the run
-                try:
-                    post_resp = await client.post(
-                        f"{base}/api/runs",
-                        json={"query": envelope.content},
-                    )
-                    post_resp.raise_for_status()
-                    run_id = post_resp.json()["id"]
-                except Exception as exc:
-                    logger.error("create_runs_agent: failed to start run: %s", exc)
-                    return {
-                        "status": "error",
-                        "reply": "Sorry, I could not reach the agent. Please try again.",
-                        "channel": envelope.channel,
-                        "sender_id": envelope.sender_id,
-                    }
+            from datetime import datetime as _dt
+            from routers.runs import process_run
 
-                # 2. Poll for completion
-                deadline = asyncio.get_event_loop().time() + _POLL_TIMEOUT_S
-                poll_client = httpx.AsyncClient(timeout=10.0)
-                try:
-                    while True:
-                        if asyncio.get_event_loop().time() >= deadline:
-                            logger.warning(
-                                "create_runs_agent: run %s timed out after %ss",
-                                run_id, _POLL_TIMEOUT_S,
-                            )
-                            return {
-                                "status": "timeout",
-                                "reply": "The agent took too long to respond. Please try again.",
-                                "channel": envelope.channel,
-                                "sender_id": envelope.sender_id,
-                            }
+            run_id = f"nexus_{int(_dt.now().timestamp())}"
+            contextual_query = self._build_contextual_query(envelope.content)
+            print(f"\n{'='*60}")
+            print(f"[NEXUS] create_runs_agent.process_message called")
+            print(f"[NEXUS]   run_id   = {run_id}")
+            print(f"[NEXUS]   channel  = {envelope.channel}")
+            print(f"[NEXUS]   sender   = {envelope.sender_id}")
+            print(f"[NEXUS]   content  = {envelope.content[:80]}")
+            print(f"[NEXUS]   history  = {len(self._history)} turns")
+            print(f"{'='*60}")
+            logger.info(
+                "create_runs_agent: starting run %s for '%s'",
+                run_id, envelope.content[:60],
+            )
 
-                        try:
-                            get_resp = await poll_client.get(
-                                f"{base}/api/runs/{run_id}/output"
-                            )
-                            get_resp.raise_for_status()
-                            data = get_resp.json()
-                        except Exception as exc:
-                            logger.error(
-                                "create_runs_agent: poll error for run %s: %s", run_id, exc
-                            )
-                            await asyncio.sleep(_POLL_INTERVAL_S)
-                            continue
+            # Record the user turn before processing
+            self._history.append({"role": "user", "content": envelope.content})
 
-                        status = data.get("status")
-                        if status == "running":
-                            await asyncio.sleep(_POLL_INTERVAL_S)
-                            continue
+            try:
+                await process_run(run_id, contextual_query)
+                print(f"[NEXUS] process_run({run_id}) completed successfully")
+            except Exception as exc:
+                print(f"[NEXUS] process_run({run_id}) RAISED: {exc}")
+                logger.error("create_runs_agent: process_run raised: %s", exc, exc_info=True)
+                self._history.append({"role": "assistant", "content": "(error)"})
+                self._trim_history()
+                return {
+                    "status": "error",
+                    "reply": "The agent encountered an error. Please try again.",
+                    "channel": envelope.channel,
+                    "sender_id": envelope.sender_id,
+                }
 
-                        if status == "failed":
-                            return {
-                                "status": "failed",
-                                "reply": "The agent encountered an error processing your request.",
-                                "channel": envelope.channel,
-                                "sender_id": envelope.sender_id,
-                            }
+            result = await _fetch_run_output(run_id)
+            print(f"[NEXUS] _fetch_run_output({run_id}) = status={result.get('status')}, output_len={len(str(result.get('output', '') or ''))}")
+            if not result.get("output"):
+                print(f"[NEXUS] WARNING: No output found for {run_id}!")
+                self._history.append({"role": "assistant", "content": "(no output)"})
+                self._trim_history()
+                return {
+                    "status": "failed",
+                    "reply": "The agent could not complete your request. Please try again.",
+                    "channel": envelope.channel,
+                    "sender_id": envelope.sender_id,
+                }
 
-                        # completed (or unknown status — treat as done)
-                        output = data.get("output") or "Done."
-                        return {
-                            "status": "completed",
-                            "reply": output,
-                            "channel": envelope.channel,
-                            "sender_id": envelope.sender_id,
-                            "run_id": run_id,
-                        }
-                finally:
-                    await poll_client.aclose()
+            reply = result["output"]
+            # Truncate stored history to avoid bloating future prompts
+            self._history.append({"role": "assistant", "content": reply[:500]})
+            self._trim_history()
+
+            return {
+                "status": "completed",
+                "reply": reply,
+                "channel": envelope.channel,
+                "sender_id": envelope.sender_id,
+                "run_id": run_id,
+            }
 
     return RunsAgentAdapter(session_id)
