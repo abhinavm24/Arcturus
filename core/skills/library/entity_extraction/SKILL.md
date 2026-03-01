@@ -47,3 +47,4 @@ Only include user facts when the text clearly indicates they apply to the user (
 3. If nothing relevant, return empty arrays.
 4. entity_relationships link entities to each other (e.g. Person works_at Company).
 5. user_facts are first-person facts about the user.
+6. Prefer extracting at least one entity when the text mentions any named thing, preference, or concept (e.g. "Python", "vegetarian", "John").

@@ -39,6 +39,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Backfill Qdrant memories to Neo4j")
     parser.add_argument("--dry-run", action="store_true", help="Extract only, skip Neo4j and Qdrant updates")
     parser.add_argument("--limit", type=int, default=0, help="Max memories to process (0 = all)")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Print raw LLM response for first memory (debug)")
     args = parser.parse_args()
 
     # Ensure we use Qdrant
@@ -84,7 +85,12 @@ def main() -> int:
         if not text:
             continue
         try:
-            extracted = extractor.extract(text)
+            extracted = extractor.extract(text, verbose=args.verbose and i == 0)
+            if args.verbose and i == 0:
+                import json
+                print(f"[VERBOSE] Model: {extractor.model}")
+                print(f"[VERBOSE] Memory text (first 200 chars): {text[:200]}...")
+                print(f"[VERBOSE] Extracted: {json.dumps(extracted, indent=2)[:600]}...")
             if args.dry_run:
                 n_ent = len(extracted.get("entities", []))
                 print(f"  [{i+1}/{len(to_process)}] {memory_id[:8]}... -> {n_ent} entities (dry-run)")

@@ -58,7 +58,7 @@ class EntityExtractor:
             )
         return self._prompt
 
-    def extract(self, text: str) -> Dict[str, Any]:
+    def extract(self, text: str, verbose: bool = False) -> Dict[str, Any]:
         """
         Extract entities and relationships from memory text.
 
@@ -71,26 +71,26 @@ class EntityExtractor:
         """
         prompt = self._load_prompt()
         try:
+            # Use format=json only if model supports it well; gemma3:4b returns {} with it
+            user_msg = f"Extract entities and relationships from this memory. Return ONLY valid JSON, no markdown.\n\nMemory: {text}"
             response = requests.post(
                 self.api_url,
                 json={
                     "model": self.model,
                     "messages": [
                         {"role": "system", "content": prompt},
-                        {
-                            "role": "user",
-                            "content": f"Extract entities and relationships from this memory:\n\n{text}",
-                        },
+                        {"role": "user", "content": user_msg},
                     ],
                     "stream": False,
                     "options": {"temperature": 0.1},
-                    "format": "json",
                 },
                 timeout=get_timeout(),
             )
             response.raise_for_status()
             result = response.json()
             content = result.get("message", {}).get("content", "{}")
+            if verbose:
+                print(f"[EntityExtractor] Raw LLM response ({len(content)} chars):\n{content[:1200]}")
             return self._parse(content)
         except requests.exceptions.RequestException as e:
             print(f"[EntityExtractor] Ollama request failed: {e}")
@@ -101,18 +101,46 @@ class EntityExtractor:
 
     def _parse(self, content: str) -> Dict[str, Any]:
         """Parse LLM JSON output into expected structure."""
+        if not content or not content.strip():
+            return {"entities": [], "entity_relationships": [], "user_facts": []}
+        # Strip markdown code blocks (common when format=json still wraps)
+        raw = content.strip()
+        if raw.startswith("```"):
+            for start in ("```json\n", "```\n"):
+                if raw.startswith(start):
+                    raw = raw[len(start):]
+                    break
+            if raw.endswith("```"):
+                raw = raw[:-3].strip()
         try:
-            parsed = json.loads(content)
+            parsed = json.loads(raw)
             if not isinstance(parsed, dict):
                 return {"entities": [], "entity_relationships": [], "user_facts": []}
+            # Accept common key variants (Entities, entity_relationships, etc.)
+            entities = parsed.get("entities") or parsed.get("Entities") or []
+            rels = parsed.get("entity_relationships") or parsed.get("entity_relations") or []
+            facts = parsed.get("user_facts") or parsed.get("user_fact") or []
             return {
-                "entities": self._normalize_entities(parsed.get("entities", [])),
-                "entity_relationships": self._normalize_relationships(
-                    parsed.get("entity_relationships", [])
-                ),
-                "user_facts": self._normalize_user_facts(parsed.get("user_facts", [])),
+                "entities": self._normalize_entities(entities),
+                "entity_relationships": self._normalize_relationships(rels),
+                "user_facts": self._normalize_user_facts(facts),
             }
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            # Try json_repair for malformed JSON
+            try:
+                import json_repair
+                parsed = json_repair.loads(raw)
+                if isinstance(parsed, dict):
+                    entities = parsed.get("entities") or parsed.get("Entities") or []
+                    rels = parsed.get("entity_relationships") or parsed.get("entity_relations") or []
+                    facts = parsed.get("user_facts") or parsed.get("user_fact") or []
+                    return {
+                        "entities": self._normalize_entities(entities),
+                        "entity_relationships": self._normalize_relationships(rels),
+                        "user_facts": self._normalize_user_facts(facts),
+                    }
+            except Exception:
+                pass
             return {"entities": [], "entity_relationships": [], "user_facts": []}
 
     def _normalize_entities(self, raw: List[Any]) -> List[Dict[str, str]]:
