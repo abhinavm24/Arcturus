@@ -263,7 +263,23 @@ SPEAKER NOTES REQUIREMENTS (mandatory for every slide):
     }
   ],
   "assumptions": "Key assumptions used in the model",
-  "metadata": {"model_type": "...", "currency": "..."}
+  "metadata": {
+    "model_type": "...",
+    "currency": "...",
+    "visual_profile": "balanced|conservative|max",
+    "palette_hint": "slate-executive|iron-neutral|sand-warm",
+    "chart_plan": [
+      {
+        "tab_name": "Summary",
+        "chart_type": "line|bar|pie|scatter",
+        "title": "Chart title",
+        "category_column": "Month",
+        "value_columns": ["Revenue"],
+        "x_column": "X (scatter only)",
+        "y_column": "Y (scatter only)"
+      }
+    ]
+  }
 }
 
 - column_widths must match the number of headers
@@ -283,6 +299,10 @@ FORMATTING CONVENTIONS:
 - Use meaningful, descriptive headers (not generic "Column1", "Column2")
 - Provide appropriate column_widths for each column (wider for text, narrower for numbers)
 - Include an assumptions section when the data involves projections or estimates
+- Set metadata.visual_profile to "balanced" unless the user explicitly asks otherwise
+- Use metadata.palette_hint when a specific visual theme is obvious from context
+- Provide metadata.chart_plan for chartable datasets (1-3 charts for balanced profile)
+- chart_plan entries should prefer summary/pivot tabs when available
 
 DATA INTEGRITY:
 - All rows must have the same number of columns as headers
@@ -308,3 +328,44 @@ def get_draft_prompt_with_sequence(
         base_prompt += sequence_hint
 
     return base_prompt
+
+
+def get_sheet_visual_repair_prompt(outline: Outline, content_tree: Dict[str, Any]) -> str:
+    """Build a focused prompt to enrich ONLY sheet visual metadata."""
+    outline_json = json.dumps(outline.model_dump(mode="json"), indent=2)
+    content_json = json.dumps(content_tree, indent=2)
+
+    return f"""You are a spreadsheet visual designer. Your task is to improve ONLY visual metadata for an existing workbook.
+
+Approved outline:
+{outline_json}
+
+Current SheetContentTree:
+{content_json}
+
+Return ONLY valid JSON in this exact schema:
+{{
+  "metadata": {{
+    "visual_profile": "balanced|conservative|max",
+    "palette_hint": "slate-executive|iron-neutral|sand-warm",
+    "chart_plan": [
+      {{
+        "tab_name": "Existing tab name",
+        "chart_type": "line|bar|pie|scatter",
+        "title": "Chart title",
+        "category_column": "Header name (for line/bar/pie)",
+        "value_columns": ["Numeric header name"],
+        "x_column": "Numeric header name (scatter only)",
+        "y_column": "Numeric header name (scatter only)"
+      }}
+    ]
+  }}
+}}
+
+Rules:
+- Do NOT modify workbook_title, tabs, headers, rows, formulas, or assumptions
+- Use only tab names and header names that already exist in the current content tree
+- Keep chart_plan practical: 1-3 charts for balanced profile
+- Prefer summary, stats, or pivot-like tabs when available
+- If no chartable numeric data exists, return an empty chart_plan and visual_profile "balanced"
+- Return ONLY the JSON object, no markdown fences or explanations"""

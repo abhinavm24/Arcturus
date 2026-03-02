@@ -256,15 +256,15 @@ def test_xlsx_palette_selection_is_deterministic():
 def test_xlsx_palette_hint_overrides_hash():
     tree = _make_tree(
         workbook_title="Anything",
-        metadata={"palette_hint": "copper-report"},
+        metadata={"palette_hint": "sand-warm"},
     )
-    assert _select_palette(tree).id == "copper-report"
+    assert _select_palette(tree).id == "sand-warm"
 
 
 def test_xlsx_conditional_formatting_uses_palette_colors(tmp_path):
     path = tmp_path / "output.xlsx"
     tree = _make_tree(
-        metadata={"visual_profile": "balanced", "palette_hint": "forest-ledger"},
+        metadata={"visual_profile": "balanced", "palette_hint": "slate-executive"},
         tabs=[
             SheetTab(
                 id="t1",
@@ -280,7 +280,7 @@ def test_xlsx_conditional_formatting_uses_palette_colors(tmp_path):
     wb = openpyxl.load_workbook(str(path))
     ws = wb.active
 
-    palette = _PALETTE_BY_ID["forest-ledger"]
+    palette = _PALETTE_BY_ID["slate-executive"]
     found_palette_color = False
     for cf in ws.conditional_formatting:
         for rule in cf.rules:
@@ -413,3 +413,11 @@ def test_xlsx_column_width_respects_header_length(tmp_path):
     # Column C header is 1 char ("V"), pixel width 40/7 ≈ 5.7 is fine but floor is 10
     assert ws.column_dimensions["C"].width >= 5
     wb.close()
+
+
+def test_xlsx_all_palettes_have_header_contrast():
+    from core.studio.sheets.exporter_xlsx import _PALETTES
+    for palette in _PALETTES:
+        assert hasattr(palette, "header_contrast"), f"Palette {palette.id} missing header_contrast"
+        assert palette.header_contrast in ("light-on-dark", "dark-on-light"), \
+            f"Palette {palette.id} has invalid header_contrast: {palette.header_contrast}"
