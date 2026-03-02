@@ -11,6 +11,15 @@
 - ✅ **core/loop.py**: Null `plan_graph` guard — handles `plan_graph: null` from PlannerAgent for simple queries without crashing
 - ✅ **routers/remme.py**: Ollama embedding fixes — corrected URL construction and model name for local Ollama embeddings
 - ✅ **tests/test_runs_agent_factory.py**: Rewrote 5 tests — replaced httpx mocks with `sys.modules` injection for `routers.runs` + `patch("gateway.router._fetch_run_output")`, fixing 3 CI failures + 1 lint error (F541)
+- ✅ **channels/base.py**: Added `send_typing_indicator()` default no-op method to `ChannelAdapter` base class
+- ✅ **channels/**: Typing indicator overrides for Telegram (`sendChatAction`), Discord (`POST /channels/{id}/typing`), WebChat (SSE event push), Teams (Bot Framework typing activity), Matrix (`PUT /rooms/{roomId}/typing/{userId}`)
+- ✅ **gateway/bus.py**: `_send_typing()` helper + wired into `roundtrip()` before `ingest()` — best-effort, never blocks pipeline
+- ✅ **core/episodic_memory.py**: Fixed `'bool' object has no attribute 'get'` — added `isinstance(x, dict)` guards for `call_self` and `call_tool` in `MemorySkeletonizer.skeletonize()`
+- ✅ **tests/test_typing_indicators.py**: 11 tests (base no-op, Telegram/Discord/WebChat/Teams/Matrix typing, bus error swallow, bus roundtrip ordering)
+- ✅ **channels/**: Media attachment send support — Telegram (`sendPhoto`/`sendVideo`/`sendAudio`/`sendDocument`), Discord (embeds), Slack (Block Kit image blocks), WebChat (outbox attachments dict), Teams (Bot Framework attachments array), Matrix (`m.image`/`m.video`/`m.file` events)
+- ✅ **channels/**: Bridge adapter URL text fallback for WhatsApp, Signal, iMessage, Google Chat (attachment URLs appended to message text)
+- ✅ **gateway/bus.py**: `roundtrip()` passes `envelope.attachments` through to `deliver()` → `adapter.send_message()`
+- ✅ **tests/test_media_send.py**: 21 tests (per-adapter media send, bus attachment passthrough, payload isolation)
 
 **Week 3+ - Matrix Adapter (Channel 10/10):**
 - ✅ **channels/matrix.py**: MatrixAdapter — polling-based inbound via `GET /_matrix/client/v3/sync`; outbound via `PUT /_matrix/client/v3/rooms/{roomId}/send/m.room.message/{txnId}`; `set_bus_callback()` for inbound dispatch; skips own messages, non-m.text events, empty body; no sidecar needed

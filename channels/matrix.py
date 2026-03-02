@@ -129,6 +129,24 @@ class MatrixAdapter(ChannelAdapter):
         if self.client:
             await self.client.aclose()
 
+    async def send_typing_indicator(self, recipient_id: str, **kwargs) -> None:
+        """Send a typing indicator to a Matrix room."""
+        if not self.client or not self.access_token or not self.user_id:
+            return
+        url = (
+            f"{self.homeserver_url}{_CS_API}"
+            f"/rooms/{recipient_id}/typing/{self.user_id}"
+        )
+        headers = {"Authorization": f"Bearer {self.access_token}"}
+        try:
+            await self.client.put(
+                url,
+                json={"typing": True, "timeout": 30000},
+                headers=headers,
+            )
+        except Exception:
+            pass  # typing is cosmetic — never fail the pipeline
+
     async def send_message(self, recipient_id: str, content: str, **kwargs) -> Dict[str, Any]:
         """Send a text message to a Matrix room.
 
@@ -160,6 +178,7 @@ class MatrixAdapter(ChannelAdapter):
             f"{self.homeserver_url}{_CS_API}"
             f"/rooms/{recipient_id}/send/m.room.message/{txn_id}"
         )
+        media_attachments = kwargs.pop("attachments", [])
         body: Dict[str, Any] = {"msgtype": "m.text", "body": content, **kwargs}
         headers = {"Authorization": f"Bearer {self.access_token}"}
 
@@ -167,7 +186,7 @@ class MatrixAdapter(ChannelAdapter):
             response = await self.client.put(url, json=body, headers=headers)
             if response.status_code in (200, 201):
                 data = response.json()
-                return {
+                result = {
                     "message_id": data.get("event_id", ""),
                     "timestamp": datetime.utcnow().isoformat(),
                     "channel": "matrix",
@@ -197,6 +216,34 @@ class MatrixAdapter(ChannelAdapter):
                 "success": False,
                 "error": str(exc),
             }
+
+        # Send any media attachments as separate Matrix events
+        for att in media_attachments:
+            await self._send_attachment(recipient_id, att)
+
+        return result
+
+    _MATRIX_MSGTYPES = {"image": "m.image", "video": "m.video", "audio": "m.audio"}
+
+    async def _send_attachment(self, room_id: str, att) -> None:
+        """Send a single media attachment as a Matrix room event."""
+        msgtype = self._MATRIX_MSGTYPES.get(att.media_type, "m.file")
+        txn_id = f"arcturus-media-{int(time.time() * 1000)}"
+        url = (
+            f"{self.homeserver_url}{_CS_API}"
+            f"/rooms/{room_id}/send/m.room.message/{txn_id}"
+        )
+        body = {
+            "msgtype": msgtype,
+            "body": att.filename or "attachment",
+            "url": att.url,
+            "info": {"mimetype": att.mime_type or "application/octet-stream"},
+        }
+        headers = {"Authorization": f"Bearer {self.access_token}"}
+        try:
+            await self.client.put(url, json=body, headers=headers)
+        except Exception:
+            pass  # best-effort media delivery
 
     # ------------------------------------------------------------------
     # Internal sync loop

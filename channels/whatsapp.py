@@ -85,6 +85,14 @@ class WhatsAppAdapter(ChannelAdapter):
         if not self.client:
             await self.initialize()
 
+        media_attachments = kwargs.pop("attachments", [])
+        # Append attachment URLs as text links (bridge doesn't support native media)
+        if media_attachments:
+            links = "\n".join(
+                f"[{a.filename or a.media_type}]: {a.url}" for a in media_attachments
+            )
+            content = f"{content}\n\n{links}" if content else links
+
         url = f"{self.bridge_url}/send"
         payload: Dict[str, Any] = {"recipient_id": recipient_id, "text": content}
 

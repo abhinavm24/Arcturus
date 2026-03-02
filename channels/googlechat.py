@@ -107,6 +107,14 @@ class GoogleChatAdapter(ChannelAdapter):
         if not self.client:
             await self.initialize()
 
+        media_attachments = kwargs.pop("attachments", [])
+        # Append attachment URLs as text links (Google Chat has no binary upload API)
+        if media_attachments:
+            links = "\n".join(
+                f"[{a.filename or a.media_type}]: {a.url}" for a in media_attachments
+            )
+            content = f"{content}\n\n{links}" if content else links
+
         # Build the message payload — simple text message
         payload: Dict[str, Any] = {"text": content, **kwargs}
 

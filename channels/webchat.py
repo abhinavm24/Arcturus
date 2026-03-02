@@ -54,6 +54,14 @@ class WebChatAdapter(ChannelAdapter):
             WebChatAdapter._outboxes[session_id] = deque(maxlen=200)
         return WebChatAdapter._outboxes[session_id]
 
+    async def send_typing_indicator(self, recipient_id: str, **kwargs) -> None:
+        """Push a typing event to all SSE subscribers for this session."""
+        for q in list(WebChatAdapter._sse_queues.get(recipient_id, [])):
+            try:
+                q.put_nowait({"type": "typing", "session_id": recipient_id})
+            except asyncio.QueueFull:
+                pass
+
     async def send_message(self, recipient_id: str, content: str, **kwargs) -> Dict[str, Any]:
         """Enqueue an outbound message to a WebChat session.
 
@@ -68,6 +76,7 @@ class WebChatAdapter(ChannelAdapter):
         Returns:
             Dict with message_id and success flag.
         """
+        media_attachments = kwargs.get("attachments", [])
         msg: Dict[str, Any] = {
             "message_id": str(uuid.uuid4()),
             "timestamp": datetime.utcnow().isoformat(),
@@ -75,6 +84,12 @@ class WebChatAdapter(ChannelAdapter):
             "recipient_id": recipient_id,
             "content": content,
         }
+        if media_attachments:
+            msg["attachments"] = [
+                {"media_type": a.media_type, "url": a.url,
+                 "filename": a.filename, "mime_type": a.mime_type}
+                for a in media_attachments
+            ]
         self.get_outbox(recipient_id).append(msg)
         # Push to any live SSE subscriber queues for this session.
         for q in list(WebChatAdapter._sse_queues.get(recipient_id, [])):

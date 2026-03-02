@@ -249,6 +249,21 @@ class MessageBus:
             self._session_locks[key] = asyncio.Lock()
         return self._session_locks[key]
 
+    async def _send_typing(self, envelope: MessageEnvelope) -> None:
+        """Best-effort typing indicator — never blocks or raises."""
+        adapter = self.adapters.get(envelope.channel)
+        if adapter is None:
+            return
+        recipient = (
+            envelope.session_id
+            or envelope.conversation_id
+            or envelope.sender_id
+        )
+        try:
+            await adapter.send_typing_indicator(recipient)
+        except Exception:
+            pass  # typing is cosmetic — never fail the pipeline
+
     async def roundtrip(self, envelope: MessageEnvelope) -> BusResult:
         """Ingest an inbound envelope and auto-deliver the agent's reply.
 
@@ -268,6 +283,8 @@ class MessageBus:
             BusResult from the deliver step (includes ingest data in agent_response).
         """
         async with self._session_lock(envelope):
+            # Send typing indicator before agent processes
+            await self._send_typing(envelope)
             ingest_result = await self.ingest(envelope)
             print(f"[BUS] ingest done: success={ingest_result.success} agent_response={type(ingest_result.agent_response).__name__}={ingest_result.agent_response}")
             if not ingest_result.success:
@@ -296,6 +313,7 @@ class MessageBus:
                 channel=envelope.channel,
                 recipient_id=reply_recipient,
                 text=reply_text,
+                attachments=envelope.attachments,
             )
             # Merge ingest metadata into the deliver result for full context.
             deliver_result.operation = "roundtrip"

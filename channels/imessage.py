@@ -107,6 +107,14 @@ class iMessageAdapter(ChannelAdapter):
         if not self.client:
             await self.initialize()
 
+        media_attachments = kwargs.pop("attachments", [])
+        # Append attachment URLs as text links (BlueBubbles binary upload not wired)
+        if media_attachments:
+            links = "\n".join(
+                f"[{a.filename or a.media_type}]: {a.url}" for a in media_attachments
+            )
+            content = f"{content}\n\n{links}" if content else links
+
         url = f"{self.bluebubbles_url}/api/v1/message/text"
         params = {"password": self.password} if self.password else {}
         payload: Dict[str, Any] = {

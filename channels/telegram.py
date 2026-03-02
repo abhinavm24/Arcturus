@@ -160,6 +160,16 @@ class TelegramAdapter(ChannelAdapter):
             print("[TELEGRAM] WARNING: no bus callback set — message dropped")
             logger.warning("TelegramAdapter: no bus callback set — message dropped")
 
+    async def send_typing_indicator(self, recipient_id: str, **kwargs) -> None:
+        """Send a 'typing' chat action to a Telegram chat."""
+        if not self.client:
+            return
+        url = f"{self.TELEGRAM_API_URL}{self.token}/sendChatAction"
+        try:
+            await self.client.post(url, json={"chat_id": recipient_id, "action": "typing"})
+        except Exception:
+            pass  # typing is cosmetic — never fail the pipeline
+
     # ------------------------------------------------------------------
     # Outbound
     # ------------------------------------------------------------------
@@ -215,6 +225,7 @@ class TelegramAdapter(ChannelAdapter):
         # (., !, -, etc.) which are common in agent output.  Callers that
         # pre-escape their text can pass parse_mode="MarkdownV2" explicitly.
 
+        media_attachments = kwargs.pop("attachments", [])
         chunks = self._split_message(content, self._MAX_MSG_LEN)
         last_result: Dict[str, Any] = {}
 
@@ -259,4 +270,23 @@ class TelegramAdapter(ChannelAdapter):
                     "failed_chunk": i + 1,
                 }
 
+        # Send any media attachments after text
+        for att in media_attachments:
+            await self._send_attachment(recipient_id, att)
+
         return last_result
+
+    async def _send_attachment(self, chat_id: str, att) -> None:
+        """Send a single media attachment via the appropriate Telegram API."""
+        _ENDPOINTS = {
+            "image": ("sendPhoto", "photo"),
+            "video": ("sendVideo", "video"),
+            "audio": ("sendAudio", "audio"),
+            "document": ("sendDocument", "document"),
+        }
+        method, key = _ENDPOINTS.get(att.media_type, ("sendDocument", "document"))
+        url = f"{self.TELEGRAM_API_URL}{self.token}/{method}"
+        try:
+            await self.client.post(url, json={"chat_id": chat_id, key: att.url})
+        except Exception:
+            pass  # best-effort media delivery

@@ -77,6 +77,7 @@ class SlackAdapter(ChannelAdapter):
             "Authorization": f"Bearer {self.token}",
             "Content-Type": "application/json",
         }
+        media_attachments = kwargs.pop("attachments", [])
         payload: Dict[str, Any] = {
             "channel": recipient_id,
             "text": content,
@@ -95,7 +96,7 @@ class SlackAdapter(ChannelAdapter):
                     timestamp = datetime.fromtimestamp(ts_float).isoformat()
                 except (ValueError, TypeError):
                     timestamp = datetime.utcnow().isoformat()
-                return {
+                result = {
                     "message_id": ts,
                     "timestamp": timestamp,
                     "channel": "slack",
@@ -120,6 +121,30 @@ class SlackAdapter(ChannelAdapter):
                 "success": False,
                 "error": str(exc),
             }
+
+        # Send any media attachments after text
+        for att in media_attachments:
+            await self._send_attachment(recipient_id, att)
+
+        return result
+
+    async def _send_attachment(self, channel_id: str, att) -> None:
+        """Send a single media attachment to Slack via Block Kit."""
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Content-Type": "application/json",
+        }
+        if att.media_type == "image":
+            blocks = [{"type": "image", "image_url": att.url,
+                        "alt_text": att.filename or "image"}]
+            payload: Dict[str, Any] = {"channel": channel_id, "blocks": blocks}
+        else:
+            payload = {"channel": channel_id,
+                       "text": f"<{att.url}|{att.filename or 'attachment'}>"}
+        try:
+            await self.client.post(self.SLACK_API_URL, json=payload, headers=headers)
+        except Exception:
+            pass  # best-effort media delivery
 
     @staticmethod
     def verify_signature(body: bytes, timestamp: str, signature: str, secret: str) -> bool:

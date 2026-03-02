@@ -63,6 +63,17 @@ class DiscordAdapter(ChannelAdapter):
         if self.client:
             await self.client.aclose()
 
+    async def send_typing_indicator(self, recipient_id: str, **kwargs) -> None:
+        """Trigger a typing indicator in a Discord channel (lasts ~10 seconds)."""
+        if not self.client:
+            return
+        url = f"{self.DISCORD_API_BASE}/channels/{recipient_id}/typing"
+        headers = {"Authorization": self.token}
+        try:
+            await self.client.post(url, headers=headers)
+        except Exception:
+            pass  # typing is cosmetic — never fail the pipeline
+
     async def send_message(self, recipient_id: str, content: str, **kwargs) -> Dict[str, Any]:
         """Send a message to a Discord text channel.
 
@@ -89,13 +100,14 @@ class DiscordAdapter(ChannelAdapter):
         if len(content) > 2000:
             content = content[:1997] + "..."
 
+        media_attachments = kwargs.pop("attachments", [])
         payload: Dict[str, Any] = {"content": content, **kwargs}
 
         try:
             response = await self.client.post(url, json=payload, headers=headers)
             if response.status_code in (200, 201):
                 data = response.json()
-                return {
+                result = {
                     "message_id": data.get("id", ""),
                     "timestamp": data.get("timestamp", datetime.utcnow().isoformat()),
                     "channel": "discord",
@@ -125,6 +137,26 @@ class DiscordAdapter(ChannelAdapter):
                 "success": False,
                 "error": str(exc),
             }
+
+        # Send any media attachments as embeds after text
+        for att in media_attachments:
+            await self._send_attachment(recipient_id, att)
+
+        return result
+
+    async def _send_attachment(self, channel_id: str, att) -> None:
+        """Send a single media attachment as a Discord embed."""
+        url = f"{self.DISCORD_API_BASE}/channels/{channel_id}/messages"
+        headers = {"Authorization": self.token, "Content-Type": "application/json"}
+        embed: Dict[str, Any] = {"url": att.url}
+        if att.media_type == "image":
+            embed["image"] = {"url": att.url}
+        else:
+            embed["description"] = f"[{att.filename or 'file'}]({att.url})"
+        try:
+            await self.client.post(url, json={"embeds": [embed]}, headers=headers)
+        except Exception:
+            pass  # best-effort media delivery
 
     @staticmethod
     def verify_signature(body: bytes, timestamp: str, signature: str, public_key: str) -> bool:

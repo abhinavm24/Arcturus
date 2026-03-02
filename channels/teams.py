@@ -90,6 +90,19 @@ class TeamsAdapter(ChannelAdapter):
         if self.client:
             await self.client.aclose()
 
+    async def send_typing_indicator(self, recipient_id: str, **kwargs) -> None:
+        """Send a typing activity to a Teams conversation."""
+        if not self.client:
+            return
+        url = self.service_url + _BOT_FRAMEWORK_API.format(conversation_id=recipient_id)
+        headers: Dict[str, str] = {"Content-Type": "application/json"}
+        if self.app_password:
+            headers["Authorization"] = f"Bearer {self.app_password}"
+        try:
+            await self.client.post(url, json={"type": "typing"}, headers=headers)
+        except Exception:
+            pass  # typing is cosmetic — never fail the pipeline
+
     async def send_message(self, recipient_id: str, content: str, **kwargs) -> Dict[str, Any]:
         """Send a message to a Teams conversation via the Bot Framework API.
 
@@ -108,12 +121,20 @@ class TeamsAdapter(ChannelAdapter):
             await self.initialize()
 
         url = self.service_url + _BOT_FRAMEWORK_API.format(conversation_id=recipient_id)
+        media_attachments = kwargs.pop("attachments", [])
         payload: Dict[str, Any] = {
             "type": "message",
             "text": content,
             "textFormat": "markdown",
             **kwargs,
         }
+        if media_attachments:
+            payload["attachments"] = [
+                {"contentType": a.mime_type or "application/octet-stream",
+                 "contentUrl": a.url,
+                 "name": a.filename or "attachment"}
+                for a in media_attachments
+            ]
 
         # Add Authorization header if app credentials are configured
         headers: Dict[str, str] = {"Content-Type": "application/json"}
