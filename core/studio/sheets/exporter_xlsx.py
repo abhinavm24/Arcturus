@@ -467,7 +467,10 @@ def _infer_chart_spec(tab: SheetTab) -> Optional[Dict[str, Any]]:
         unique_categories = {
             str(v).strip() for v in cat_values if v is not None and str(v).strip()
         }
-        chart_type = "pie" if len(unique_categories) <= 8 else "bar"
+        if len(unique_categories) <= 8 and len(unique_categories) >= len(cat_values) * 0.7:
+            chart_type = "pie"
+        else:
+            chart_type = "bar"
 
     return {
         "chart_type": chart_type,
