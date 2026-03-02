@@ -1,18 +1,23 @@
-# Project 11 Setup Guide: Qdrant (Cloud or Local)
+# Project 11 Setup Guide: Qdrant & Neo4j (Mnemo)
 
-This guide will help you set up Qdrant (cloud or local via Docker) for Phase 1 of Project 11 (Mnemo).
+This guide will help you set up Qdrant (cloud or local via Docker) and Neo4j for Project 11 (Mnemo).
 
 **Two vector stores** use Qdrant:
 - **Remme memories** (`arcturus_memories`) — user preferences, facts, identity
 - **RAG chunks** (`arcturus_rag_chunks`) — document chunks, conversation history
 
-**Note**: You don't need to do these steps if you don't want to move to Qdrant. The default config uses FAISS (legacy) for both.
+**Neo4j knowledge graph** (Phase 2/3):
+- **Entities & relationships** — extracted from Remme memories; linked via `memory_id`, `entity_ids`
+- **Dual-path retrieval** — semantic (Qdrant) + entity recall (Neo4j); rescues when vector search returns 0
+
+**Note**: You don't need to do these steps if you don't want to move to Qdrant/Neo4j. The default config uses FAISS (legacy) for vector stores; knowledge graph is disabled unless `NEO4J_ENABLED=true`.
 
 ## Prerequisites
 
 - Python 3.11+
 - Project dependencies installed (`uv sync` or `pip install -e .`)
-- For Option 2 (Docker): Docker and Docker Compose installed
+- For Docker: Docker and Docker Compose installed
+- **For Neo4j knowledge graph**: Ollama running (entity extraction uses LLM); Neo4j driver (`pip install neo4j` or `uv sync`)
 
 ## Step 1: Set Up Qdrant
 
@@ -39,6 +44,8 @@ Choose one of the following options:
    VECTOR_STORE_PROVIDER=qdrant
    RAG_VECTOR_STORE_PROVIDER=qdrant
    ```
+
+   See `.env.example` for Neo4j variables if using the knowledge graph.
 
    The application reads these from the environment (see `memory/qdrant_config.py`). No code changes are required.
 
@@ -151,6 +158,17 @@ uv sync
 pip install -e .
 ```
 
+### Neo4j connection failed
+- Ensure Neo4j is running: `docker ps | grep neo4j`
+- Check auth matches: `NEO4J_AUTH=neo4j/arcturus-neo4j` in docker-compose → `NEO4J_PASSWORD=arcturus-neo4j`
+- Test Bolt: `bolt://localhost:7687` (not http)
+- If `neo4j` Python package missing: `uv sync` or `pip install neo4j`
+
+### Entity extraction fails (Ollama)
+- Ollama must be running for entity extraction
+- Check `entity_extraction` model in `config/settings.json` or skill config
+- Run `ollama list` to see available models
+
 ## Migration: FAISS → Qdrant
 
 **Important for Qdrant Cloud:** The migration scripts load `.env` automatically. Ensure your `.env` has:
@@ -194,14 +212,83 @@ uv run python scripts/migrate_rag_faiss_to_qdrant.py
 
 Reads from `mcp_servers/faiss_index/` (metadata.json + index.bin), writes to `arcturus_rag_chunks`. Keeps `metadata.json` for BM25 hybrid search.
 
+---
+
+## Neo4j Knowledge Graph (Phase 2/3)
+
+To enable entity extraction, graph storage, and dual-path retrieval:
+
+### Neo4j via Docker
+
+Neo4j is defined in `docker-compose.yml`. Start it:
+
+```bash
+docker-compose up -d neo4j
+```
+
+Default auth: `neo4j/arcturus-neo4j` (see `NEO4J_AUTH` in docker-compose).
+
+**Verify:**
+- Browser UI: http://localhost:7474
+- Bolt: `bolt://localhost:7687`
+
+### Configure .env for Neo4j
+
+Add to `.env`:
+
+```
+NEO4J_ENABLED=true
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=arcturus-neo4j
+```
+
+These must match your Neo4j instance (Docker uses `NEO4J_AUTH=neo4j/arcturus-neo4j`).
+
+### Backfill Memories to Neo4j
+
+If you already have memories in Qdrant, backfill them into Neo4j:
+
+```bash
+# Prerequisites: Qdrant running, NEO4J_* in .env, Ollama running
+export VECTOR_STORE_PROVIDER=qdrant  # or set in .env
+uv run python scripts/migrate_memories_to_neo4j.py
+```
+
+Options:
+- `--dry-run` — Extract entities only; skip Neo4j and Qdrant updates
+- `--limit N` — Process at most N memories (0 = all)
+- `-v` — Verbose (raw LLM response for first memory)
+
+### New Memories
+
+When `NEO4J_ENABLED=true` and you add memories via Qdrant (`VECTOR_STORE_PROVIDER=qdrant`), `qdrant_store.add()` automatically:
+1. Extracts entities via LLM (Ollama)
+2. Writes User, Memory, Session, Entity nodes and relationships to Neo4j
+3. Updates Qdrant payload with `entity_ids` and `entity_labels`
+
+**Ollama** must be running for entity extraction (uses `entity_extraction` model from config).
+
+### Neo4j Environment Variables
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `NEO4J_ENABLED` | Enable knowledge graph | `false` |
+| `NEO4J_URI` | Neo4j Bolt URI | `bolt://localhost:7687` |
+| `NEO4J_USER` | Neo4j username | `neo4j` |
+| `NEO4J_PASSWORD` | Neo4j password | (required when enabled) |
+
+---
+
 ## Next Steps
 
-Once Qdrant is running and tests pass:
+Once Qdrant (and optionally Neo4j) is running and tests pass:
 
 1. **Remme**: `memory/vector_store.py`, `memory/backends/qdrant_store.py`
 2. **RAG**: `memory/rag_store.py`, `memory/rag_backends/qdrant_rag_store.py`
-3. **Config**: `config/qdrant_config.yaml` — collection specs
-4. **Write integration tests**: Test with real embeddings from your models
+3. **Knowledge graph**: `memory/knowledge_graph.py`, `memory/entity_extractor.py`, `memory/memory_retriever.py`
+4. **Config**: `config/qdrant_config.yaml` — collection specs (including `session_id`, `entity_labels`)
+5. **Write integration tests**: Test with real embeddings and entity extraction
 
 ## Useful Commands
 
@@ -253,8 +340,12 @@ rag_store = get_rag_vector_store(provider="qdrant")  # arcturus_rag_chunks
 | `QDRANT_API_KEY` | API key (Cloud) | `null` |
 | `VECTOR_STORE_PROVIDER` | Remme memories backend | `faiss` |
 | `RAG_VECTOR_STORE_PROVIDER` | RAG chunks backend | `faiss` |
+| `NEO4J_ENABLED` | Enable Neo4j knowledge graph | `false` |
+| `NEO4J_URI` | Neo4j Bolt URI | `bolt://localhost:7687` |
+| `NEO4J_USER` | Neo4j username | `neo4j` |
+| `NEO4J_PASSWORD` | Neo4j password | (required when `NEO4J_ENABLED=true`) |
 
 ---
 
-**Ready to proceed?** Once Qdrant is running and tests pass, run the migration scripts to move existing FAISS data to Qdrant! 🚀
+**Ready to proceed?** Once Qdrant is running and tests pass, run the migration scripts to move existing FAISS data to Qdrant. Optionally enable Neo4j and backfill memories for dual-path retrieval. 🚀
 
