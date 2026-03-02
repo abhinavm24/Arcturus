@@ -460,6 +460,10 @@ class KnowledgeGraph:
         """
         Traverse graph from given entity ids. Returns related entities, memories, user context.
         Used for retrieval: Qdrant returns memory_ids → Neo4j expands with graph context.
+
+        TODO: depth is not yet used; traversal is currently one hop only. When implementing
+        multi-hop expansion, use depth to limit relationship hops (e.g. variable-length path
+        in Cypher or iterative expansion up to depth).
         """
         if not self._enabled or not entity_ids:
             return {"entities": [], "memories": [], "user_facts": []}
