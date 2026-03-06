@@ -458,6 +458,7 @@ Follow this sequence so that each step has a clear deliverable and the system st
 
 **2. Unified extractor (single output schema)**
 
+- Introduce the **feature flag** (e.g. `MNEMO_ENABLED` or repurposed `NEO4J_ENABLED`) and wire entry points (smart scan, direct memory add, GET /preferences) to branch on it: when enabled → unified path; when disabled → legacy extractor + normalizer + JSON hubs (see **Implementation notes: Feature flag**).
 - Merge logic from `memory/entity_extractor.py` and `remme/extractor.py` into one **unified extractor** (new module or under `memory/`). One LLM call (or orchestrated calls) producing a single **Unified Extraction Result**: `source`, `memories`, `entities`, `entity_relationships`, `facts`, `evidence_events`.
 - **Facts** in the output: list of objects with `namespace`, `key`, `value_type`, `value` (or value_text/value_number/value_bool/value_json), optional `entity_ref` (entity id or composite key for REFERS_TO). No separate top-level "preferences" dict vs "user_facts" list — both are facts (entity-ref facts map to REFERS_TO + derived User–Entity).
 - **evidence_events** in the output: list with at least `source_type`, `source_ref`; optionally `signal_category`, `raw_excerpt`, `confidence_delta` for later use.
@@ -493,6 +494,16 @@ Follow this sequence so that each step has a clear deliverable and the system st
 # Implementation Notes (Coding Guidance)
 
 These notes are intended to make implementation easier and avoid overbuilding the first version.
+
+**Feature flag: Mnemo vs legacy path**
+
+- Introduce a single config flag to choose between the **new unified Mnemo path** and the **legacy path** while the feature is developed and tested. Options:
+  - **Option A:** New env var **`MNEMO_ENABLED`** (e.g. in `.env`). When `true`, use unified extractor, Neo4j Fact/Evidence, and adapter for preferences; when `false`, use existing RemMe extractor, staging, normalizer, belief engine, and JSON hubs.
+  - **Option B:** Repurpose and rename **`NEO4J_ENABLED`** so that it gates the full Mnemo path (unified extraction + Neo4j for entities and for Fact/Evidence). When `false`, use legacy extractor + normalizer + JSON hubs; when `true`, use unified extractor and Neo4j for both entities and preferences. If repurposing, document the new meaning and consider keeping backward compatibility (e.g. read both `NEO4J_ENABLED` and `MNEMO_ENABLED` during transition, then drop the old name).
+- **When flag is false:** Keep using the existing RemMe extractor (`remme/extractor.py`), staging store, normalizer (`remme/normalizer.py`), belief engine, and JSON hubs. No unified extractor, no Fact/Evidence writes, no adapter read from Neo4j for preferences.
+- **When flag is true:** Use the unified extractor, ingestion to Neo4j (entities + Fact + Evidence), and adapter to serve `GET /remme/preferences` from Neo4j. Do not use staging, normalizer, or JSON hub writes for preferences.
+- **Deprecation:** Mark the old extractor, normalizer, staging, and any hub-write paths as **deprecated** (e.g. module-level deprecation warnings or comments) while keeping them in the codebase and tested. Once the new path is stable and the flag is always on, remove the deprecated code and the flag check.
+- **`.env.example`:** Document the chosen flag (e.g. `MNEMO_ENABLED=true`) and that when false, legacy extractor and normalizer are used.
 
 **Evidence node — start minimal**
 
