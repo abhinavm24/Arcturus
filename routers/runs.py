@@ -267,8 +267,8 @@ async def process_run(run_id: str, query: str, source: str = "web", stream: bool
                             return existing[idx]["id"]
                     return alias_or_id
 
+                extraction = None
                 if is_mnemo_enabled():
-                    # Unified extractor: memories + entities + facts + evidence (step 3 will write Fact/Evidence to Neo4j)
                     unified = get_unified_extractor()
                     extraction = await asyncio.to_thread(
                         unified.extract_from_session, query, history, existing_memories=results
@@ -283,6 +283,7 @@ async def process_run(run_id: str, query: str, source: str = "web", stream: bool
                         existing_memories=results,
                     )
 
+                session_memory_ids = []
                 if commands:
                     for cmd in commands:
                         if not isinstance(cmd, dict):
@@ -297,10 +298,12 @@ async def process_run(run_id: str, query: str, source: str = "web", stream: bool
                         try:
                             if action == "add" and text:
                                 emb = get_embedding(text, task_type="search_document")
-                                remme_store.add(
+                                added = remme_store.add(
                                     text, emb, category="derived", source=f"run_{run_id}",
                                     metadata={"session_id": run_id},
                                 )
+                                if added and isinstance(added, dict) and added.get("id"):
+                                    session_memory_ids.append(added["id"])
                                 print(f"✅ Remme: Added new fact: {text}")
                             elif action == "update" and target_id and text:
                                 emb = get_embedding(text, task_type="search_document")
@@ -311,6 +314,21 @@ async def process_run(run_id: str, query: str, source: str = "web", stream: bool
                                 print(f"🗑️ Remme: Deleted fact {target_id_raw or target_id}")
                         except Exception as e:
                             print(f"❌ Remme Action Failed: {e}")
+
+                if is_mnemo_enabled() and extraction and session_memory_ids:
+                    try:
+                        from memory.knowledge_graph import get_knowledge_graph
+                        from memory.user_id import get_user_id
+                        kg = get_knowledge_graph()
+                        if kg and kg.enabled:
+                            user_id = get_user_id()
+                            kg.ingest_from_unified_extraction(
+                                user_id, run_id, session_memory_ids, extraction,
+                                category="derived", source="session",
+                            )
+                            print(f"✅ Remme: Ingested session extraction to Neo4j ({len(session_memory_ids)} memories, facts + evidence)")
+                    except Exception as e:
+                        print(f"⚠️ Remme Neo4j session ingestion failed: {e}")
 
                 if not is_mnemo_enabled() and preferences:
                     from remme.extractor import apply_preferences_to_hubs

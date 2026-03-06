@@ -134,6 +134,8 @@ class QdrantVectorStore:
                 entities = legacy.get("entities")
                 entity_relationships = legacy.get("entity_relationships")
                 user_facts = legacy.get("user_facts")
+                facts = list(extraction.facts) if extraction.facts else None
+                evidence_events = list(extraction.evidence_events) if extraction.evidence_events else None
             else:
                 from memory.entity_extractor import EntityExtractor
                 extractor = EntityExtractor()
@@ -141,6 +143,8 @@ class QdrantVectorStore:
                 entities = extracted.get("entities")
                 entity_relationships = extracted.get("entity_relationships")
                 user_facts = extracted.get("user_facts")
+                facts = None
+                evidence_events = None
             result = kg.ingest_memory(
                 memory_id=memory_id,
                 text=text,
@@ -151,6 +155,8 @@ class QdrantVectorStore:
                 entities=entities,
                 entity_relationships=entity_relationships,
                 user_facts=user_facts,
+                facts=facts,
+                evidence_events=evidence_events,
             )
             entity_ids = result.get("entity_ids", result if isinstance(result, list) else [])
             entity_labels = result.get("entity_labels", []) if isinstance(result, dict) else []

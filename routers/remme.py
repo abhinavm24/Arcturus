@@ -106,6 +106,7 @@ async def background_smart_scan():
                 
                 # Extract memories (and preferences when legacy path)
                 from memory.mnemo_config import is_mnemo_enabled
+                extraction = None
                 if is_mnemo_enabled():
                     from shared.state import get_unified_extractor
                     unified = get_unified_extractor()
@@ -122,6 +123,7 @@ async def background_smart_scan():
                         commands = result
                         preferences = {}
                 
+                session_memory_ids = []
                 if commands:
                     for cmd in commands:
                         action = cmd.get("action")
@@ -130,10 +132,12 @@ async def background_smart_scan():
                         try:
                             if action == "add" and text:
                                 emb = get_embedding(text, task_type="search_document")
-                                remme_store.add(
+                                added = remme_store.add(
                                     text, emb, category="derived", source=f"run_{run_id}",
                                     metadata={"session_id": run_id},
                                 )
+                                if added and isinstance(added, dict) and added.get("id"):
+                                    session_memory_ids.append(added["id"])
                                 processed_count += 1
                             elif action == "update" and tid and text:
                                 emb = get_embedding(text, task_type="search_document")
@@ -141,6 +145,20 @@ async def background_smart_scan():
                                 processed_count += 1
                         except Exception as e:
                             print(f"❌ RemMe Action Failed: {e}")
+                
+                if is_mnemo_enabled() and extraction and session_memory_ids:
+                    try:
+                        from memory.knowledge_graph import get_knowledge_graph
+                        from memory.user_id import get_user_id
+                        kg = get_knowledge_graph()
+                        if kg and kg.enabled:
+                            user_id = get_user_id()
+                            kg.ingest_from_unified_extraction(
+                                user_id, run_id, session_memory_ids, extraction,
+                                category="derived", source="session",
+                            )
+                    except Exception as e:
+                        print(f"⚠️ RemMe Neo4j session ingestion failed: {e}")
                 
                 if not is_mnemo_enabled() and preferences:
                     try:

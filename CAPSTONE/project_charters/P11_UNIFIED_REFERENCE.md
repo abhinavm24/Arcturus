@@ -25,7 +25,7 @@
 | **Retrieval gap (semantic returns 0)** | ✅ Addressed | Entity-first path runs independently; k=10; graph expansion; multi-tenant safe |
 | **Memory delete & orphan cleanup** | ✅ Done | `delete_memory` in `knowledge_graph.py`; qdrant_store calls it on delete |
 | **Session-level extraction** | ⏳ Not done | §8.2 — one pass for memories + preferences + entities from session |
-| **Preferences unification** | ⏳ In progress | Steps 1–2 done (schema + unified extractor + MNEMO_ENABLED); §8.3 — step 3 ingestion, step 4 adapter |
+| **Preferences unification** | ⏳ In progress | Steps 1–3 done (schema + extractor + ingestion); §8.3 — step 4 adapter for GET /preferences |
 | **Spaces / space_id** | ⏳ Reserved | §8.4 — no code; hook documented for when Spaces are added |
 | **Entity-friendly Qdrant payload** | ⏳ Optional | §8.1 — beyond `entity_ids` + optional `entity_labels`; not implemented |
 | **Expansion depth** | ⏳ Future | One-hop only; `depth` parameter reserved for multi-hop |
@@ -213,7 +213,7 @@ Query
 
 ## 7. Implementation status (verified in code)
 
-- **knowledge_graph.py:** `ENTITY_REL_TYPES`, `USER_ENTITY_REL_TYPES`; Fact and Evidence schema (constraints: Fact `(user_id, namespace, key)` unique, Evidence `id` unique); User─HAS_FACT→Fact, Fact─SUPPORTED_BY→Evidence, Evidence─FROM_*→Memory/Session, Fact─REFERS_TO→Entity, Fact─SUPERSEDES→Fact; canonical_name/composite_key; `resolve_entity_candidates`; `expand_from_entities` (one-hop, user-scoped); `delete_memory` with orphan cleanup; `create_user_entity_relationship` accepts optional `confidence` for backward compatibility.
+- **knowledge_graph.py:** `ENTITY_REL_TYPES`, `USER_ENTITY_REL_TYPES`, `FACT_DERIVATION_TABLE`; Fact/Evidence schema; `upsert_fact()`, `create_evidence()`, `_derive_user_entity_from_facts()`; `ingest_memory(..., facts=, evidence_events=)` writes Fact/Evidence and derives User–Entity; `ingest_from_unified_extraction(user_id, session_id, memory_ids, extraction)` for session pipeline; canonical_name/composite_key; `resolve_entity_candidates`; `expand_from_entities`; `delete_memory`; `create_user_entity_relationship(..., confidence=)`.
 - **entity_extractor.py:** LLM extraction from memory text; `extract_from_query` for query NER; uses `entity_extraction` skill and model from config.
 - **memory_retriever.py:** `retrieve()` — semantic k=10; entity path independent; `result_ids` global dedupe; `_store_get_many`/`get_batch` for batch fetch; `expand_from_entities` and entity-first path both used.
 - **qdrant_store.py:** `_ingest_to_knowledge_graph` on add; when MNEMO_ENABLED uses unified extractor and `to_legacy_entity_result()`; else EntityExtractor; on delete calls `kg.delete_memory(memory_id)` when KG enabled.
@@ -235,6 +235,8 @@ Use this section as the single list of what to do next; update as you complete i
 **Step 1 (Neo4j schema Fact + Evidence):** Done. Fact and Evidence node types, relationships (User─HAS_FACT→Fact, Fact─SUPPORTED_BY→Evidence, Evidence─FROM_MEMORY→Memory, Evidence─FROM_SESSION→Session, Fact─REFERS_TO→Entity, Fact─SUPERSEDES→Fact), and constraints (Fact unique on `(user_id, namespace, key)`, Evidence unique on `id`) added in `memory/knowledge_graph.py`. User–Entity edges documented as derived from Fact+REFERS_TO (step 3); optional `confidence` on User–Entity for backward compatibility. SchemaField nodes deferred.
 
 **Step 2 (Unified extractor + feature flag):** Done. Pydantic schema in `memory/unified_extraction_schema.py` (UnifiedExtractionResult, FactItem, EvidenceEventItem, etc.). Unified extractor in `memory/unified_extractor.py`: `extract_from_session()`, `extract_from_memory_text()`, single LLM call producing memories, entities, entity_relationships, facts, evidence_events. Feature flag `MNEMO_ENABLED` in `memory/mnemo_config.py`; when true: runs.py and remme.py use unified extractor and do not write preferences to hubs/staging; qdrant_store uses unified extractor for ingestion and `to_legacy_entity_result()` for existing ingest_memory. When false: legacy RemMe extractor, normalizer, staging, JSON hubs. Deprecation notes in remme/extractor.py and remme/normalizer.py. `.env.example` documents MNEMO_ENABLED. GET /preferences unchanged (adapter in step 4).
+
+**Step 3 (Ingestion pipelines):** Done. **knowledge_graph.py:** `upsert_fact()`, `create_evidence()`, `_derive_user_entity_from_facts()`, `FACT_DERIVATION_TABLE` (namespace/key → WORKS_AT, LIVES_IN, PREFERS, KNOWS). `ingest_memory()` accepts optional `facts` and `evidence_events`; when provided, upserts Fact nodes, creates Evidence (linked to Fact, Session, Memory), and derives User–Entity edges. `ingest_from_unified_extraction(user_id, session_id, memory_ids, extraction)` for session pipeline: creates Memory nodes, entities, relationships, facts, evidence, derivation. **Session pipeline:** runs.py and remme.py collect memory IDs from add commands and call `kg.ingest_from_unified_extraction()` when MNEMO_ENABLED and Neo4j enabled. **Direct memory add:** qdrant_store passes `extraction.facts` and `extraction.evidence_events` into `ingest_memory()`. Idempotency: Fact upsert by (user_id, namespace, key); Evidence append-only.
 
 ### 8.1 Optional: Entity-friendly payload in Qdrant
 

@@ -26,6 +26,7 @@ Enable via NEO4J_ENABLED=true and NEO4J_URI/NEO4J_USER/NEO4J_PASSWORD env vars.
 
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from datetime import datetime
@@ -74,6 +75,19 @@ ENTITY_REL_TYPES = frozenset({
 # (step 3); existing code may also create them from legacy user_facts. Optional confidence
 # and source_memory_ids on these edges support backward compatibility during migration.
 USER_ENTITY_REL_TYPES = frozenset({"LIVES_IN", "WORKS_AT", "KNOWS", "PREFERS"})
+
+# Derivation table: (namespace_prefix, key_pattern, rel_type). A fact with entity_ref
+# matches when namespace.startswith(prefix) and (key == key_pattern or key_pattern == "*").
+# First match wins; put more specific rules first. Used to create User–Entity edges from Fact+REFERS_TO.
+FACT_DERIVATION_TABLE: List[Tuple[str, str, str]] = [
+    ("identity.work", "company", "WORKS_AT"),
+    ("identity.work", "*", "WORKS_AT"),
+    ("identity.location", "*", "LIVES_IN"),
+    ("operating.environment", "location", "LIVES_IN"),
+    ("preferences", "*", "PREFERS"),
+    ("identity.food", "*", "PREFERS"),
+    ("identity.", "*", "KNOWS"),
+]
 
 
 class KnowledgeGraph:
@@ -368,6 +382,201 @@ class KnowledgeGraph:
             params,
         )
 
+    def upsert_fact(
+        self,
+        user_id: str,
+        namespace: str,
+        key: str,
+        value_type: str = "text",
+        value_text: Optional[str] = None,
+        value_number: Optional[float] = None,
+        value_bool: Optional[bool] = None,
+        value_json: Optional[Any] = None,
+        confidence: float = 0.8,
+        source_mode: str = "extraction",
+        entity_ref: Optional[str] = None,
+    ) -> Optional[str]:
+        """
+        Create or update a Fact node. Idempotent by (user_id, namespace, key).
+        Returns fact id (Neo4j node id or internal id) or None.
+        """
+        if not self._enabled or not namespace or not key:
+            return None
+        fact_id = str(uuid.uuid4())
+        now = datetime.utcnow().isoformat() + "Z"
+        self._run_write(
+            """
+            MERGE (u:User {user_id: $user_id})
+            WITH u
+            MERGE (f:Fact {user_id: $user_id, namespace: $namespace, key: $key})
+            ON CREATE SET
+                f.id = $fact_id,
+                f.value_type = $value_type,
+                f.value_text = $value_text,
+                f.value_number = $value_number,
+                f.value_bool = $value_bool,
+                f.value_json = $value_json,
+                f.confidence = $confidence,
+                f.source_mode = $source_mode,
+                f.first_seen_at = $now,
+                f.last_seen_at = $now
+            ON MATCH SET
+                f.value_type = $value_type,
+                f.value_text = $value_text,
+                f.value_number = $value_number,
+                f.value_bool = $value_bool,
+                f.value_json = $value_json,
+                f.confidence = $confidence,
+                f.source_mode = $source_mode,
+                f.last_seen_at = $now
+            WITH f, u
+            MERGE (u)-[:HAS_FACT]->(f)
+            """,
+            {
+                "user_id": user_id,
+                "namespace": namespace,
+                "key": key,
+                "fact_id": fact_id,
+                "value_type": value_type or "text",
+                "value_text": value_text,
+                "value_number": value_number,
+                "value_bool": value_bool,
+                "value_json": json.dumps(value_json) if isinstance(value_json, (dict, list)) else (str(value_json) if value_json is not None else None),
+                "confidence": confidence,
+                "source_mode": source_mode or "extraction",
+                "now": now,
+            },
+        )
+        if entity_ref:
+            # Resolve entity_ref (composite_key "Type::name" or entity id) and create Fact-REFERS_TO-Entity
+            eid = self._resolve_entity_ref_for_fact(entity_ref, user_id)
+            if eid:
+                self._run_write(
+                    """
+                    MATCH (f:Fact {user_id: $user_id, namespace: $namespace, key: $key}), (e:Entity {id: $entity_id})
+                    MERGE (f)-[:REFERS_TO]->(e)
+                    """,
+                    {"user_id": user_id, "namespace": namespace, "key": key, "entity_id": eid},
+                )
+        return fact_id
+
+    def _resolve_entity_ref_for_fact(self, entity_ref: str, user_id: str) -> Optional[str]:
+        """Resolve entity_ref (composite_key 'Type::name' or entity id) to entity id. Create entity if composite key."""
+        ref = (entity_ref or "").strip()
+        if not ref:
+            return None
+        if "::" in ref:
+            parts = ref.split("::", 1)
+            etype = (parts[0] or "Concept").strip()
+            name = (parts[1] or "").strip()
+            if name:
+                return self.get_or_create_entity(etype, name)
+        # Assume it's an entity id
+        records = self._run_query("MATCH (e:Entity {id: $id}) RETURN e.id AS id", {"id": ref})
+        if records and records[0].get("id"):
+            return records[0]["id"]
+        return None
+
+    def create_evidence(
+        self,
+        evidence_id: str,
+        source_type: str,
+        source_ref: str,
+        user_id: str,
+        namespace: str,
+        key: str,
+        session_id: Optional[str] = None,
+        memory_id: Optional[str] = None,
+        timestamp: Optional[str] = None,
+    ) -> None:
+        """
+        Create Evidence node and link to Fact (SUPPORTED_BY) by (user_id, namespace, key),
+        optionally to Session (FROM_SESSION) and Memory (FROM_MEMORY). Evidence is append-only.
+        """
+        if not self._enabled or not evidence_id or not user_id or not namespace or not key:
+            return
+        ts = timestamp or (datetime.utcnow().isoformat() + "Z")
+        self._run_write(
+            """
+            MERGE (ev:Evidence {id: $evidence_id})
+            ON CREATE SET ev.source_type = $source_type, ev.source_ref = $source_ref, ev.timestamp = $timestamp
+            WITH ev
+            MATCH (f:Fact {user_id: $user_id, namespace: $namespace, key: $key})
+            MERGE (f)-[:SUPPORTED_BY]->(ev)
+            """,
+            {
+                "evidence_id": evidence_id,
+                "source_type": source_type or "extraction",
+                "source_ref": source_ref,
+                "timestamp": ts,
+                "user_id": user_id,
+                "namespace": namespace,
+                "key": key,
+            },
+        )
+        if session_id:
+            self._run_write(
+                """
+                MATCH (ev:Evidence {id: $evidence_id}), (s:Session {session_id: $session_id})
+                MERGE (ev)-[:FROM_SESSION]->(s)
+                """,
+                {"evidence_id": evidence_id, "session_id": session_id},
+            )
+        if memory_id:
+            self._run_write(
+                """
+                MATCH (ev:Evidence {id: $evidence_id}), (m:Memory {id: $memory_id})
+                MERGE (ev)-[:FROM_MEMORY]->(m)
+                """,
+                {"evidence_id": evidence_id, "memory_id": memory_id},
+            )
+
+    def _derive_user_entity_from_facts(
+        self,
+        user_id: str,
+        facts: List[Any],
+        entity_map: Dict[Tuple[str, str], str],
+        source_memory_ids: Optional[List[str]] = None,
+    ) -> None:
+        """
+        For each fact with entity_ref, resolve entity and create User–Entity edge from derivation table.
+        facts: list of dict-like with namespace, key, entity_ref (e.g. FactItem or dict).
+        entity_map: (type_normalized, canonical_name) -> entity_id from current ingestion.
+        """
+        for f in facts:
+            entity_ref = f.get("entity_ref") if isinstance(f, dict) else getattr(f, "entity_ref", None)
+            if not entity_ref:
+                continue
+            namespace = (f.get("namespace") or "") if isinstance(f, dict) else (getattr(f, "namespace", None) or "")
+            key = (f.get("key") or "") if isinstance(f, dict) else (getattr(f, "key", None) or "")
+            rel_type = "PREFERS"
+            for prefix, key_pat, rt in FACT_DERIVATION_TABLE:
+                if namespace.startswith(prefix) and (key_pat == "*" or key == key_pat):
+                    rel_type = rt
+                    break
+            if rel_type not in USER_ENTITY_REL_TYPES:
+                rel_type = "PREFERS"
+            eid = None
+            ref = str(entity_ref).strip()
+            if "::" in ref:
+                parts = ref.split("::", 1)
+                etype = (parts[0] or "Concept").strip().lower()
+                name = (parts[1] or "").strip()
+                if name:
+                    canonical = _canonical_name(name)
+                    eid = entity_map.get((etype, canonical))
+                    if not eid:
+                        eid = self.get_or_create_entity(etype or "Concept", name)
+            else:
+                eid = ref
+            if eid:
+                self.create_user_entity_relationship(
+                    user_id,
+                    eid,
+                    rel_type,
+                    source_memory_ids=source_memory_ids or [],
+                )
+
     def ingest_memory(
         self,
         memory_id: str,
@@ -379,9 +588,13 @@ class KnowledgeGraph:
         entities: Optional[List[Dict[str, Any]]] = None,
         entity_relationships: Optional[List[Dict[str, Any]]] = None,
         user_facts: Optional[List[Dict[str, Any]]] = None,
+        facts: Optional[List[Any]] = None,
+        evidence_events: Optional[List[Any]] = None,
     ) -> Dict[str, Any]:
         """
         Full ingestion: create Memory, extract/link entities, relationships, user facts.
+        When facts/evidence_events are provided (unified extraction), also upsert Fact nodes,
+        create Evidence, and derive User–Entity edges.
         Returns dict with entity_ids (for Neo4j link) and entity_labels (type, name for Qdrant payload).
         """
         empty_result: Dict[str, Any] = {"entity_ids": [], "entity_labels": []}
@@ -447,6 +660,69 @@ class KnowledgeGraph:
                 source_memory_ids=[memory_id],
             )
 
+        # Fact + Evidence (unified extraction path): upsert facts, create evidence, derive User–Entity
+        if facts:
+            for f in facts:
+                ns = f.get("namespace", "") if isinstance(f, dict) else getattr(f, "namespace", "")
+                k = f.get("key", "") if isinstance(f, dict) else getattr(f, "key", "")
+                if not ns or not k:
+                    continue
+                vt = f.get("value_type", "text") if isinstance(f, dict) else getattr(f, "value_type", "text")
+                val = f.get("value") if isinstance(f, dict) else getattr(f, "value", None)
+                vt_text = f.get("value_text") if isinstance(f, dict) else getattr(f, "value_text", None)
+                vt_num = f.get("value_number") if isinstance(f, dict) else getattr(f, "value_number", None)
+                vt_bool = f.get("value_bool") if isinstance(f, dict) else getattr(f, "value_bool", None)
+                vt_json = f.get("value_json") if isinstance(f, dict) else getattr(f, "value_json", None)
+                if vt_text is None and val is not None and vt == "text":
+                    vt_text = str(val)
+                if vt_num is None and val is not None and vt == "number":
+                    vt_num = float(val) if isinstance(val, (int, float)) else None
+                if vt_bool is None and val is not None and vt == "bool":
+                    vt_bool = bool(val)
+                if vt_json is None and val is not None and vt == "json":
+                    vt_json = val
+                entity_ref = f.get("entity_ref") if isinstance(f, dict) else getattr(f, "entity_ref", None)
+                self.upsert_fact(
+                    user_id=user_id,
+                    namespace=ns,
+                    key=k,
+                    value_type=vt,
+                    value_text=vt_text,
+                    value_number=vt_num,
+                    value_bool=vt_bool,
+                    value_json=vt_json,
+                    confidence=0.8,
+                    source_mode="extraction",
+                    entity_ref=entity_ref,
+                )
+                ev_id = str(uuid.uuid4())
+                ev_source_ref = memory_id
+                ev_source_type = "extraction"
+                if evidence_events:
+                    first_ev = evidence_events[0]
+                    if isinstance(first_ev, dict):
+                        ev_source_ref = first_ev.get("source_ref") or memory_id
+                        ev_source_type = first_ev.get("source_type", "extraction")
+                    else:
+                        ev_source_ref = getattr(first_ev, "source_ref", None) or memory_id
+                        ev_source_type = getattr(first_ev, "source_type", "extraction")
+                self.create_evidence(
+                    evidence_id=ev_id,
+                    source_type=ev_source_type,
+                    source_ref=ev_source_ref or memory_id,
+                    user_id=user_id,
+                    namespace=ns,
+                    key=k,
+                    session_id=session_id,
+                    memory_id=memory_id,
+                )
+            self._derive_user_entity_from_facts(
+                user_id,
+                facts,
+                entity_map,
+                source_memory_ids=[memory_id],
+            )
+
         # Dedupe entity_ids while preserving order; keep corresponding labels (first occurrence)
         seen: Set[str] = set()
         deduped_ids: List[str] = []
@@ -457,6 +733,116 @@ class KnowledgeGraph:
                 deduped_ids.append(eid)
                 deduped_labels.append(label)
         return {"entity_ids": deduped_ids, "entity_labels": deduped_labels}
+
+    def ingest_from_unified_extraction(
+        self,
+        user_id: str,
+        session_id: str,
+        memory_ids: List[str],
+        extraction: Any,
+        category: str = "derived",
+        source: str = "session",
+    ) -> None:
+        """
+        Session pipeline: write Memory nodes, entities, relationships, facts, evidence from
+        a UnifiedExtractionResult. Creates User, Session; one Memory per memory_id; entities
+        and entity_relationships; upserts facts and evidence; derives User–Entity edges.
+        """
+        if not self._enabled or not user_id or not session_id or not memory_ids:
+            return
+        self.get_or_create_user(user_id)
+        self.get_or_create_session(session_id)
+        entity_map: Dict[Tuple[str, str], str] = {}
+        entities = getattr(extraction, "entities", None) or (extraction.get("entities", []) if isinstance(extraction, dict) else [])
+        entity_relationships = getattr(extraction, "entity_relationships", None) or (extraction.get("entity_relationships", []) if isinstance(extraction, dict) else [])
+        facts = getattr(extraction, "facts", None) or (extraction.get("facts", []) if isinstance(extraction, dict) else [])
+        evidence_events = getattr(extraction, "evidence_events", None) or (extraction.get("evidence_events", []) if isinstance(extraction, dict) else [])
+
+        for memory_id in memory_ids:
+            self.create_memory(memory_id, user_id, session_id, category=category, source=source)
+        for ent in entities:
+            etype = getattr(ent, "type", None) or (ent.get("type", "Concept") if isinstance(ent, dict) else "Concept")
+            name = getattr(ent, "name", None) or (ent.get("name", "") if isinstance(ent, dict) else "")
+            if not name:
+                continue
+            canonical = _canonical_name(name)
+            type_norm = (str(etype) or "Concept").strip().lower()
+            key = (type_norm, canonical)
+            if key not in entity_map:
+                entity_map[key] = self.get_or_create_entity(etype, name)
+            for memory_id in memory_ids:
+                self.link_memory_to_entity(memory_id, entity_map[key])
+        for rel in entity_relationships:
+            from_type = getattr(rel, "from_type", "Entity") or (rel.get("from_type", "Entity") if isinstance(rel, dict) else "Entity")
+            from_name = getattr(rel, "from_name", "") or (rel.get("from_name", "") if isinstance(rel, dict) else "")
+            to_type = getattr(rel, "to_type", "Entity") or (rel.get("to_type", "Entity") if isinstance(rel, dict) else "Entity")
+            to_name = getattr(rel, "to_name", "") or (rel.get("to_name", "") if isinstance(rel, dict) else "")
+            from_key = (str(from_type).strip().lower(), _canonical_name(from_name))
+            to_key = (str(to_type).strip().lower(), _canonical_name(to_name))
+            from_id = entity_map.get(from_key)
+            to_id = entity_map.get(to_key)
+            if from_id and to_id:
+                rtype = getattr(rel, "type", "related_to") or (rel.get("type", "related_to") if isinstance(rel, dict) else "related_to")
+                self.create_entity_relationship(
+                    from_id, to_id,
+                    rel_type=rtype,
+                    value=rel.get("value") if isinstance(rel, dict) else getattr(rel, "value", None),
+                    confidence=float(rel.get("confidence", 1.0)) if isinstance(rel, dict) else getattr(rel, "confidence", 1.0),
+                    source_memory_ids=memory_ids,
+                )
+        for f in facts:
+            ns = getattr(f, "namespace", "") or (f.get("namespace", "") if isinstance(f, dict) else "")
+            k = getattr(f, "key", "") or (f.get("key", "") if isinstance(f, dict) else "")
+            if not ns or not k:
+                continue
+            vt = getattr(f, "value_type", "text") or (f.get("value_type", "text") if isinstance(f, dict) else "text")
+            val = getattr(f, "value", None) if not isinstance(f, dict) else f.get("value")
+            vt_text = getattr(f, "value_text", None) if not isinstance(f, dict) else f.get("value_text")
+            vt_num = getattr(f, "value_number", None) if not isinstance(f, dict) else f.get("value_number")
+            vt_bool = getattr(f, "value_bool", None) if not isinstance(f, dict) else f.get("value_bool")
+            vt_json = getattr(f, "value_json", None) if not isinstance(f, dict) else f.get("value_json")
+            if vt_text is None and val is not None and vt == "text":
+                vt_text = str(val)
+            if vt_num is None and val is not None and vt == "number":
+                vt_num = float(val) if isinstance(val, (int, float)) else None
+            if vt_bool is None and val is not None and vt == "bool":
+                vt_bool = bool(val)
+            if vt_json is None and val is not None and vt == "json":
+                vt_json = val
+            entity_ref = getattr(f, "entity_ref", None) if not isinstance(f, dict) else f.get("entity_ref")
+            self.upsert_fact(
+                user_id=user_id,
+                namespace=ns,
+                key=k,
+                value_type=vt,
+                value_text=vt_text,
+                value_number=vt_num,
+                value_bool=vt_bool,
+                value_json=vt_json,
+                confidence=0.8,
+                source_mode="extraction",
+                entity_ref=entity_ref,
+            )
+            ev_id = str(uuid.uuid4())
+            ev_source_ref = session_id
+            ev_source_type = "extraction"
+            if evidence_events:
+                first_ev = evidence_events[0]
+                ev_source_ref = (first_ev.get("source_ref") if isinstance(first_ev, dict) else getattr(first_ev, "source_ref", None)) or session_id
+                ev_source_type = (first_ev.get("source_type", "extraction") if isinstance(first_ev, dict) else getattr(first_ev, "source_type", "extraction"))
+            self.create_evidence(
+                evidence_id=ev_id,
+                source_type=ev_source_type,
+                source_ref=ev_source_ref,
+                user_id=user_id,
+                namespace=ns,
+                key=k,
+                session_id=session_id,
+                memory_id=memory_ids[0] if memory_ids else None,
+                timestamp=None,
+            )
+        if facts:
+            self._derive_user_entity_from_facts(user_id, facts, entity_map, source_memory_ids=memory_ids)
 
     def get_entities_for_memory(self, memory_id: str) -> List[Dict[str, Any]]:
         """Get entities linked to a memory."""
