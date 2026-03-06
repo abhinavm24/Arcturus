@@ -11,8 +11,7 @@ Goals:
 -   Move **user preferences and profile data from JSON hubs to Neo4j**
 -   Maintain **Qdrant as the semantic recall store**
 -   Introduce a canonical **Fact + Evidence model**
--   Allow **UI editing of user profile/preferences** while preserving
-    provenance and confidence
+-   Allow **UI editing of user profile/preferences** (implemented **last**)
 -   Prepare the system for **future multi‑space architecture**
 
 This document is meant to accompany:
@@ -54,6 +53,39 @@ Problems with current model:
 3.  Extraction logic is split across systems
 4.  Preference values are mixed with inferred identity data
 5.  UI edits cannot be cleanly reconciled with extraction confidence
+
+------------------------------------------------------------------------
+
+# Mapping: current preference pipeline → new architecture
+
+The current RemMe preference flow (extractor → staging → normalizer →
+belief engine → JSON hubs, plus evidence_log) is replaced as follows.
+No separate normalizer or staging layer; canonical mapping and
+confidence live in the unified extractor and ingestion.
+
+| Old responsibility              | Old component   | New component            |
+| --------------------------------- | --------------- | ------------------------ |
+| Extract preference candidates    | extractor       | unified extractor        |
+| Stage preference updates         | staging (JSON)  | **removed**              |
+| Map preference to canonical field| LLM normalizer  | unified extractor        |
+| Manage confidence updates       | belief engine   | ingestion logic          |
+| Store preference                | JSON hub        | Neo4j Fact node          |
+| Store evidence                  | evidence_log    | Neo4j Evidence node      |
+| Render UI                       | JSON hub files  | adapter from Neo4j       |
+| Handle unknown fields           | extras (in hub) | Fact with `namespace=extras` |
+
+**Implications:**
+
+- **Normalizer** is removed as a separate step; its job (raw key →
+  canonical `namespace`+`key`) is done inside the unified extractor
+  output and prompt.
+- **Staging** is removed; extractor output goes straight to ingestion →
+  Neo4j.
+- **Belief engine** is replaced by ingestion-time logic that sets/updates
+  Fact confidence when writing or upserting from extraction or migration.
+- **Unknown fields** (today’s “extras” in soft_identity_hub) become
+  Facts with `namespace=extras` and `key=<field_name>`; the adapter
+  can still expose an `extras` structure for the UI.
 
 ------------------------------------------------------------------------
 
@@ -141,19 +173,13 @@ Represents **why the system believes a fact is true**.
 
     Evidence
      ├ id
-     ├ source_type      (e.g. extraction | ui_edit | session_summary | system_observation)
+     ├ source_type      (e.g. extraction | session_summary | system_observation | migration | ui_edit)
      ├ source_ref       (memory_id or session_id; links to Memory or Session)
      └ timestamp
 
 **Optional (add when needed for display or decay):** `signal_category`, `signal_strength`, `raw_excerpt`, `confidence_delta`.
 
-Evidence sources may include:
-
--   conversation turns
--   session summaries
--   extracted memories
--   UI edits
--   system observations
+Evidence sources: conversation turns, session summaries, extracted memories, system observations, migration, **UI edits** (implemented last).
 
 ------------------------------------------------------------------------
 
@@ -327,13 +353,14 @@ Steps:
 
 ## UI Preference Edit Pipeline
 
-When the user edits a preference via UI:
+When the user edits a preference via UI (implemented **last** in the implementation order):
 
 1.  Update / create Fact node
 2.  Create Evidence node with `source_type = ui_edit`
 3.  Set `source_mode = ui_edit`
-4.  Raise confidence
-5.  Optionally generate memory snippet if needed
+4.  Raise confidence (e.g. 1.0) and update `last_confirmed_at`
+5.  Optionally generate memory snippet in Qdrant for audit
+6.  Re-run derivation for User–Entity edges if the edited fact implies an entity relationship
 
 ------------------------------------------------------------------------
 
@@ -391,7 +418,7 @@ Every fact has supporting evidence.
 
 ### Clean UI Editing
 
-User edits update facts without corrupting extraction history.
+User edits update facts without corrupting extraction history (implemented last).
 
 ### Better Graph Structure
 
@@ -448,18 +475,18 @@ Follow this sequence so that each step has a clear deliverable and the system st
 - Add a **service or module** that reads from Neo4j: collect all Facts for the user (and optionally derived User–Entity edges) and build the same structure as the current `GET /remme/preferences` response (output_contract, operating_context, soft_identity, evidence summary, meta). Map Fact namespace+key to the existing hub shape; resolve conflicts by confidence and last_confirmed_at.
 - Wire `GET /remme/preferences` (or equivalent) to this adapter when Neo4j is enabled; keep optional fallback to JSON hubs during rollout.
 
-**5. UI edit pipeline (write path)**
-
-- When the user edits a preference/fact in the UI: **upsert** the Fact (set value, value_type, etc.); set `source_mode = ui_edit`, update `last_confirmed_at` and confidence (e.g. 1.0 or high); **create** an Evidence node with `source_type = ui_edit`, `source_ref` = session or a synthetic ref, link Fact─SUPPORTED_BY→Evidence. Optionally create a short memory snippet in Qdrant for audit. **Re-run derivation** for User–Entity edges if the edited fact implies an entity relationship.
-
-**6. Migration (JSON → Neo4j)**
+**5. Migration (JSON → Neo4j)**
 
 - One-time script: for each existing JSON hub (preferences_hub, operating_context_hub, soft_identity_hub), parse the file and create Fact nodes (and optionally Evidence nodes if evidence_log is imported). Map hub field paths to Fact namespace+key; set source_mode = migration and confidence from hub meta if available. Create Evidence from evidence_log if desired. Run derivation to backfill User–Entity edges where applicable.
 - After migration: adapter reads from Neo4j; optionally keep JSON as read-only fallback or remove writes to JSON.
 
-**7. Phase 3 (Spaces) preparation**
+**6. Phase 3 (Spaces) preparation**
 
 - When implementing Spaces: add space_id (or Space node and IN_SPACE) to Memory and optionally to Fact. Scope adapter and derivation by space so that "current space" preferences and facts are what the UI and retrieval see. No code required in this design phase; ensure Fact/Memory schema can accept an optional space_id or relationship.
+
+**7. UI edit pipeline (last)**
+
+- When the user edits a preference/fact in the UI: **upsert** the Fact (set value, value_type, etc.); set `source_mode = ui_edit`, update `last_confirmed_at` and confidence (e.g. 1.0); **create** an Evidence node with `source_type = ui_edit`, `source_ref` = session or a synthetic ref, link Fact─SUPPORTED_BY→Evidence. Optionally create a short memory snippet in Qdrant for audit. **Re-run derivation** for User–Entity edges if the edited fact implies an entity relationship.
 
 ------------------------------------------------------------------------
 
@@ -470,6 +497,10 @@ These notes are intended to make implementation easier and avoid overbuilding th
 **Evidence node — start minimal**
 
 - Implement only **id**, **source_type**, **source_ref**, **timestamp** for Evidence at first. Add `signal_category`, `signal_strength`, `raw_excerpt`, `confidence_delta` when building features that use them (e.g. "why do we believe this?" in UI, or confidence decay).
+
+**Fact source_mode**
+
+- **extraction** and **migration** are used from steps 1–6. **ui_edit** is used when step 7 (UI edit pipeline) is implemented.
 
 **Fact value storage**
 
@@ -510,6 +541,6 @@ Use the **Implementation order** above as the main plan. High-level checklist:
 2.  Implement **Unified Extraction** output schema and merge extractors (step 2).
 3.  Update **ingestion pipelines** (session + direct memory add) and **derived User–Entity edges** (step 3).
 4.  Build **adapter** to generate UI hub shape from Neo4j (step 4).
-5.  Implement **UI edit** pipeline (step 5).
-6.  **Migrate** legacy JSON hubs into graph (step 6).
-7.  Prepare for **Phase 3: Spaces** when ready (step 7).
+5.  **Migrate** legacy JSON hubs into graph (step 5).
+6.  Prepare for **Phase 3: Spaces** when ready (step 6).
+7.  Implement **UI edit** pipeline (step 7 — last).
