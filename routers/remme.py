@@ -342,45 +342,85 @@ async def get_remme_profile():
         
         # 3. Load Preferences for styling and content
         try:
-            from remme.hubs.preferences_hub import get_preferences_hub
-            from remme.hubs.operating_context_hub import get_operating_context_hub
-            from remme.hubs.soft_identity_hub import get_soft_identity_hub
-            
-            prefs_hub = get_preferences_hub()
-            context_hub = get_operating_context_hub()
-            soft_hub = get_soft_identity_hub()
-            
-            # Gather relevant bits for the prompt
-            context_data = {
-                "tech_stack": {
-                    "os": context_hub.get_os(),
-                    "shell": context_hub.get_shell(),
-                    "languages": context_hub.get_primary_languages(),
-                    "location": context_hub.data.environment.location_region.value
-                },
-                "output_contract": {
-                    "verbosity": prefs_hub.get_verbosity(),
-                    "tones": prefs_hub.get_tone_constraints(),
-                    "avoid": prefs_hub.get_avoid_patterns()
-                },
-                "traits": soft_hub.data.meta.get("traits", {}),
-                "interests": {
-                    "professional": soft_hub.data.interests_and_hobbies.professional_interests,
-                    "hobbies": soft_hub.data.interests_and_hobbies.personal_hobbies
-                },
-                "meta": {
-                    "total_evidence": (
-                        prefs_hub.data.meta.evidence_count + 
-                        context_hub.data.meta.evidence_count + 
-                        soft_hub.data.meta.evidence_count
-                    ),
-                    "overall_confidence": max(
-                        prefs_hub.data.meta.confidence,
-                        context_hub.data.meta.confidence,
-                        soft_hub.data.meta.confidence
-                    )
+            from memory.mnemo_config import is_mnemo_enabled
+            if is_mnemo_enabled():
+                from memory.neo4j_preferences_adapter import build_preferences_from_neo4j
+                from memory.user_id import get_user_id
+                prefs_data = build_preferences_from_neo4j(get_user_id())
+                if prefs_data:
+                    prefs = prefs_data.get("preferences", {})
+                    oc = prefs_data.get("operating_context", {})
+                    soft = prefs_data.get("soft_identity", {})
+                    meta = prefs_data.get("meta", {})
+                    oc_out = prefs.get("output_contract", {})
+                    interests = soft.get("interests_and_hobbies", {})
+                    context_data = {
+                        "tech_stack": {
+                            "os": oc.get("os", "unknown"),
+                            "shell": oc.get("shell", "unknown"),
+                            "languages": oc.get("primary_languages", []),
+                            "location": oc.get("location")
+                        },
+                        "output_contract": {
+                            "verbosity": oc_out.get("verbosity", "detailed"),
+                            "tones": oc_out.get("tone_constraints", []),
+                            "avoid": prefs.get("anti_preferences", {})
+                        },
+                        "traits": soft.get("extras", {}),
+                        "interests": {
+                            "professional": interests.get("professional_interests", []),
+                            "hobbies": interests.get("personal_hobbies", [])
+                        },
+                        "meta": {
+                            "total_evidence": meta.get("total_evidence", 0),
+                            "overall_confidence": meta.get("overall_confidence", 0.5)
+                        }
+                    }
+                else:
+                    context_data = {
+                        "meta": {"overall_confidence": 0.5, "total_evidence": 0},
+                        "output_contract": {"verbosity": "detailed", "tones": []},
+                        "tech_stack": {"os": "unknown", "shell": "unknown", "languages": [], "location": None},
+                        "traits": {},
+                        "interests": {"professional": [], "hobbies": []}
+                    }
+            else:
+                from remme.hubs.preferences_hub import get_preferences_hub
+                from remme.hubs.operating_context_hub import get_operating_context_hub
+                from remme.hubs.soft_identity_hub import get_soft_identity_hub
+                prefs_hub = get_preferences_hub()
+                context_hub = get_operating_context_hub()
+                soft_hub = get_soft_identity_hub()
+                context_data = {
+                    "tech_stack": {
+                        "os": context_hub.get_os(),
+                        "shell": context_hub.get_shell(),
+                        "languages": context_hub.get_primary_languages(),
+                        "location": context_hub.data.environment.location_region.value
+                    },
+                    "output_contract": {
+                        "verbosity": prefs_hub.get_verbosity(),
+                        "tones": prefs_hub.get_tone_constraints(),
+                        "avoid": prefs_hub.get_avoid_patterns()
+                    },
+                    "traits": getattr(soft_hub.data.meta, "traits", {}) if hasattr(soft_hub.data, "meta") else {},
+                    "interests": {
+                        "professional": soft_hub.data.interests_and_hobbies.professional_interests,
+                        "hobbies": soft_hub.data.interests_and_hobbies.personal_hobbies
+                    },
+                    "meta": {
+                        "total_evidence": (
+                            prefs_hub.data.meta.evidence_count +
+                            context_hub.data.meta.evidence_count +
+                            soft_hub.data.meta.evidence_count
+                        ),
+                        "overall_confidence": max(
+                            prefs_hub.data.meta.confidence,
+                            context_hub.data.meta.confidence,
+                            soft_hub.data.meta.confidence
+                        )
+                    }
                 }
-            }
             
             # Format as readable block
             pref_block = f"""
@@ -481,13 +521,21 @@ A high-level overview of who the user appears to be, their primary drivers, and 
 
 @router.get("/preferences")
 async def get_user_preferences():
-    """Get all UserModel preferences for frontend display."""
+    """Get all UserModel preferences for frontend display. When MNEMO_ENABLED, reads from Neo4j via adapter; else from JSON hubs."""
     try:
+        from memory.mnemo_config import is_mnemo_enabled
+        if is_mnemo_enabled():
+            from memory.neo4j_preferences_adapter import build_preferences_from_neo4j
+            from memory.user_id import get_user_id
+            result = build_preferences_from_neo4j(get_user_id())
+            if result:
+                return result
+
         from remme.hubs.preferences_hub import get_preferences_hub
         from remme.hubs.operating_context_hub import get_operating_context_hub
         from remme.hubs.soft_identity_hub import get_soft_identity_hub
         from remme.engines.evidence_log import get_evidence_log
-        
+
         prefs_hub = get_preferences_hub()
         context_hub = get_operating_context_hub()
         soft_hub = get_soft_identity_hub()

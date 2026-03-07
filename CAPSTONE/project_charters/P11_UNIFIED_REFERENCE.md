@@ -25,7 +25,7 @@
 | **Retrieval gap (semantic returns 0)** | ✅ Addressed | Entity-first path runs independently; k=10; graph expansion; multi-tenant safe |
 | **Memory delete & orphan cleanup** | ✅ Done | `delete_memory` in `knowledge_graph.py`; qdrant_store calls it on delete |
 | **Session-level extraction** | ⏳ Not done | §8.2 — one pass for memories + preferences + entities from session |
-| **Preferences unification** | ⏳ In progress | Steps 1–3 done (schema + extractor + ingestion); §8.3 — step 4 adapter for GET /preferences |
+| **Preferences unification** | ⏳ In progress | Steps 1–4 done; step 5 migration, step 7 UI edit remain |
 | **Spaces / space_id** | ⏳ Reserved | §8.4 — no code; hook documented for when Spaces are added |
 | **Entity-friendly Qdrant payload** | ⏳ Optional | §8.1 — beyond `entity_ids` + optional `entity_labels`; not implemented |
 | **Expansion depth** | ⏳ Future | One-hop only; `depth` parameter reserved for multi-hop |
@@ -221,6 +221,8 @@ Query
 - **memory/unified_extractor.py:** UnifiedExtractor (extract_from_session, extract_from_memory_text); single LLM output schema.
 - **memory/mnemo_config.py:** `is_mnemo_enabled()` from MNEMO_ENABLED env.
 - **routers/runs.py**, **routers/remme.py:** Branch on `is_mnemo_enabled()`; Mnemo path uses get_unified_extractor(), no hub/staging writes.
+- **memory/neo4j_preferences_adapter.py:** `build_preferences_from_neo4j()` — Facts → hub-shaped response for GET /preferences.
+- **knowledge_graph.py:** `get_facts_for_user()`, `get_evidence_count_for_user()` for adapter.
 - **routers/runs.py:** Calls `retrieve(...)` from memory_retriever for memory context.
 - **config/qdrant_config.yaml:** `indexed_payload_fields` includes `session_id`, `entity_labels` for arcturus_memories.
 - **core/skills/registry.json:** `entity_extraction` → `core/skills/library/entity_extraction`.
@@ -236,7 +238,9 @@ Use this section as the single list of what to do next; update as you complete i
 
 **Step 2 (Unified extractor + feature flag):** Done. Pydantic schema in `memory/unified_extraction_schema.py` (UnifiedExtractionResult, FactItem, EvidenceEventItem, etc.). Unified extractor in `memory/unified_extractor.py`: `extract_from_session()`, `extract_from_memory_text()`, single LLM call producing memories, entities, entity_relationships, facts, evidence_events. Feature flag `MNEMO_ENABLED` in `memory/mnemo_config.py`; when true: runs.py and remme.py use unified extractor and do not write preferences to hubs/staging; qdrant_store uses unified extractor for ingestion and `to_legacy_entity_result()` for existing ingest_memory. When false: legacy RemMe extractor, normalizer, staging, JSON hubs. Deprecation notes in remme/extractor.py and remme/normalizer.py. `.env.example` documents MNEMO_ENABLED. GET /preferences unchanged (adapter in step 4).
 
-**Step 3 (Ingestion pipelines):** Done. **knowledge_graph.py:** `upsert_fact()`, `create_evidence()`, `_derive_user_entity_from_facts()`, `FACT_DERIVATION_TABLE` (namespace/key → WORKS_AT, LIVES_IN, PREFERS, KNOWS). `ingest_memory()` accepts optional `facts` and `evidence_events`; when provided, upserts Fact nodes, creates Evidence (linked to Fact, Session, Memory), and derives User–Entity edges. `ingest_from_unified_extraction(user_id, session_id, memory_ids, extraction)` for session pipeline: creates Memory nodes, entities, relationships, facts, evidence, derivation. **Session pipeline:** runs.py and remme.py collect memory IDs from add commands and call `kg.ingest_from_unified_extraction()` when MNEMO_ENABLED and Neo4j enabled. **Direct memory add:** qdrant_store passes `extraction.facts` and `extraction.evidence_events` into `ingest_memory()`. Idempotency: Fact upsert by (user_id, namespace, key); Evidence append-only.
+**Step 3 (Ingestion pipelines):** Done. **knowledge_graph.py:** `upsert_fact()`, `create_evidence()`, `_derive_user_entity_from_facts()`, `FACT_DERIVATION_TABLE`. `ingest_memory()` accepts optional `facts` and `evidence_events`. `ingest_from_unified_extraction()` for session pipeline. **Session pipeline:** runs.py and remme.py call `kg.ingest_from_unified_extraction()`. **Direct memory add:** qdrant_store passes facts/evidence into `ingest_memory()`.
+
+**Step 4 (Adapter):** Done. `memory/neo4j_preferences_adapter.py` — `build_preferences_from_neo4j(user_id)` reads Facts from Neo4j via `kg.get_facts_for_user()` and `kg.get_evidence_count_for_user()`, maps Fact namespace+key to hub-shaped response (output_contract, operating_context, soft_identity, evidence, meta), resolves conflicts by confidence and last_seen_at. `GET /remme/preferences` uses adapter when MNEMO_ENABLED; fallback to JSON hubs when disabled. `get_remme_profile` also uses adapter when MNEMO_ENABLED for profile prompt context.
 
 ### 8.1 Optional: Entity-friendly payload in Qdrant
 

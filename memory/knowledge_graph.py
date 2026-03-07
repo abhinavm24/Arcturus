@@ -998,6 +998,75 @@ class KnowledgeGraph:
         )
         return records
 
+    def get_facts_for_user(self, user_id: str) -> List[Dict[str, Any]]:
+        """
+        Get all Facts for a user. Used by the preferences adapter (step 4).
+        Returns list of dicts with namespace, key, value_type, value_text, value_number,
+        value_bool, value_json, confidence, last_seen_at. Resolve conflicts by confidence
+        and last_seen_at in the adapter.
+        """
+        if not self._enabled or not user_id:
+            return []
+        records = self._run_query(
+            """
+            MATCH (u:User {user_id: $user_id})-[:HAS_FACT]->(f:Fact)
+            RETURN f.namespace AS namespace, f.key AS key, f.value_type AS value_type,
+                   f.value_text AS value_text, f.value_number AS value_number,
+                   f.value_bool AS value_bool, f.value_json AS value_json,
+                   f.confidence AS confidence, f.last_seen_at AS last_seen_at
+            """,
+            {"user_id": user_id},
+        )
+        out = []
+        for r in records:
+            vt = r.get("value_type") or "text"
+            if vt == "number":
+                val = r.get("value_number")
+            elif vt == "bool":
+                val = r.get("value_bool")
+            elif vt == "json" and r.get("value_json"):
+                try:
+                    val = json.loads(r["value_json"]) if isinstance(r["value_json"], str) else r["value_json"]
+                except Exception:
+                    val = r.get("value_json")
+            else:
+                val = r.get("value_text")
+            out.append({
+                "namespace": r.get("namespace") or "",
+                "key": r.get("key") or "",
+                "value_type": r.get("value_type") or "text",
+                "value_text": r.get("value_text"),
+                "value_number": r.get("value_number"),
+                "value_bool": r.get("value_bool"),
+                "value_json": val if vt == "json" else None,
+                "value": val,
+                "confidence": float(r.get("confidence") or 0),
+                "last_seen_at": r.get("last_seen_at"),
+            })
+        return out
+
+    def get_evidence_count_for_user(self, user_id: str) -> Dict[str, Any]:
+        """
+        Get evidence summary for a user (counts of Evidence linked to user's Facts).
+        Returns dict with total_events, events_by_source, events_by_type for adapter.
+        """
+        if not self._enabled or not user_id:
+            return {"total_events": 0, "events_by_source": {}, "events_by_type": {}}
+        records = self._run_query(
+            """
+            MATCH (u:User {user_id: $user_id})-[:HAS_FACT]->(f:Fact)-[:SUPPORTED_BY]->(ev:Evidence)
+            RETURN ev.source_type AS source_type, count(ev) AS cnt
+            """,
+            {"user_id": user_id},
+        )
+        total = sum(r.get("cnt", 0) for r in records)
+        by_type = {r.get("source_type") or "unknown": r.get("cnt", 0) for r in records}
+        return {
+            "total_events": total,
+            "events_by_source": {},
+            "events_by_type": by_type,
+        }
+
     def resolve_entity_candidates(
         self,
         user_id: str,
