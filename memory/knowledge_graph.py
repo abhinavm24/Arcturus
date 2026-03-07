@@ -414,16 +414,42 @@ class KnowledgeGraph:
         is_ui_edit = (source_mode or "extraction") == "ui_edit"
         confirmed_clause = ", f.last_confirmed_at = $now" if is_ui_edit else ""
         space_clause = ""
+        # value_preview: short string for Neo4j Graph UI display (set for all Fact nodes so caption can use it)
+        preview: Optional[str] = None
+        vt = (value_type or "text").lower()
+        if vt == "text" and value_text is not None:
+            preview = str(value_text)[:200]
+        elif vt == "number" and value_number is not None:
+            preview = str(value_number)
+        elif vt == "bool" and value_bool is not None:
+            preview = str(value_bool)
+        elif vt == "json" and isinstance(value_json, list) and value_json:
+            strs_ = [str(x) for x in value_json[:10] if x is not None and str(x).strip().lower() != "null"]
+            preview = ", ".join(strs_)[:200] if strs_ else None
+        elif vt == "json" and isinstance(value_json, dict):
+            preview = json.dumps(value_json)[:200]
+        # fallback: derive from any value field so value_preview is always set when there's data
+        if preview is None:
+            if value_text is not None and str(value_text).strip():
+                preview = str(value_text)[:200]
+            elif value_number is not None:
+                preview = str(value_number)
+            elif value_bool is not None:
+                preview = str(value_bool)
+            elif value_json is not None:
+                preview = (json.dumps(value_json) if isinstance(value_json, (list, dict)) else str(value_json))[:200]
         params: Dict[str, Any] = {
             "user_id": user_id,
             "namespace": namespace,
             "key": key,
             "fact_id": fact_id,
-            "value_type": value_type or "text",
+            "value_type": vt,
             "value_text": value_text,
             "value_number": value_number,
             "value_bool": value_bool,
-            "value_json": json.dumps(value_json) if isinstance(value_json, (dict, list)) else (str(value_json) if value_json is not None else None),
+            # Pass list/dict directly so Neo4j stores native list/map
+            "value_json": value_json if isinstance(value_json, (dict, list)) else (str(value_json) if value_json is not None else None),
+            "value_preview": preview,
             "confidence": confidence,
             "source_mode": source_mode or "extraction",
             "now": now,
@@ -443,6 +469,7 @@ class KnowledgeGraph:
                 f.value_number = $value_number,
                 f.value_bool = $value_bool,
                 f.value_json = $value_json,
+                f.value_preview = $value_preview,
                 f.confidence = $confidence,
                 f.source_mode = $source_mode,
                 f.first_seen_at = $now,
@@ -453,6 +480,7 @@ class KnowledgeGraph:
                 f.value_number = $value_number,
                 f.value_bool = $value_bool,
                 f.value_json = $value_json,
+                f.value_preview = $value_preview,
                 f.confidence = $confidence,
                 f.source_mode = $source_mode,
                 f.last_seen_at = $now{confirmed_clause}{space_clause}
@@ -1131,6 +1159,67 @@ class KnowledgeGraph:
                 "last_seen_at": p.get("last_seen_at"),
             })
         return out
+
+    def backfill_value_preview_for_user(self, user_id: str) -> int:
+        """
+        Set value_preview on Facts that lack it (e.g. created before value_preview existed).
+        Returns count of Facts updated.
+        """
+        if not self._enabled or not user_id:
+            return 0
+        records = self._run_query(
+            """
+            MATCH (u:User {user_id: $user_id})-[:HAS_FACT]->(f:Fact)
+            WHERE f.value_preview IS NULL
+            RETURN properties(f) AS props
+            """,
+            {"user_id": user_id},
+        )
+        updated = 0
+        for r in records:
+            p = r.get("props") or {}
+            ns = p.get("namespace") or ""
+            key = p.get("key") or ""
+            if not ns or not key:
+                continue
+            vt = (p.get("value_type") or "text").lower()
+            if vt == "number":
+                val = p.get("value_number")
+            elif vt == "bool":
+                val = p.get("value_bool")
+            elif vt == "json" and p.get("value_json") is not None:
+                try:
+                    vj = p["value_json"]
+                    val = json.loads(vj) if isinstance(vj, str) else vj
+                except Exception:
+                    val = p.get("value_json")
+            else:
+                val = p.get("value_text")
+            if val is None:
+                continue
+            preview: Optional[str] = None
+            if vt == "text":
+                preview = str(val)[:200]
+            elif vt == "number":
+                preview = str(val)
+            elif vt == "bool":
+                preview = str(val)
+            elif vt == "json" and isinstance(val, list) and val:
+                strs_ = [str(x) for x in val[:10] if x is not None and str(x).strip().lower() != "null"]
+                preview = ", ".join(strs_)[:200] if strs_ else None
+            elif vt == "json" and isinstance(val, dict):
+                preview = json.dumps(val)[:200]
+            if not preview:
+                continue
+            self._run_write(
+                """
+                MATCH (f:Fact {user_id: $user_id, namespace: $namespace, key: $key})
+                SET f.value_preview = $preview
+                """,
+                {"user_id": user_id, "namespace": ns, "key": key, "preview": preview},
+            )
+            updated += 1
+        return updated
 
     def get_evidence_count_for_user(self, user_id: str) -> Dict[str, Any]:
         """
