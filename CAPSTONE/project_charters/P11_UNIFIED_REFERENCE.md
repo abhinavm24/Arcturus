@@ -25,7 +25,7 @@
 | **Retrieval gap (semantic returns 0)** | ✅ Addressed | Entity-first path runs independently; k=10; graph expansion; multi-tenant safe |
 | **Memory delete & orphan cleanup** | ✅ Done | `delete_memory` in `knowledge_graph.py`; qdrant_store calls it on delete |
 | **Session-level extraction** | ⏳ Not done | §8.2 — one pass for memories + preferences + entities from session |
-| **Preferences unification** | ⏳ In progress | Steps 1–5 done; step 7 UI edit remains |
+| **Preferences unification** | ✅ Done | Steps 1–7 done; backend ready for UI edits |
 | **Spaces / space_id** | ⏳ Reserved | §8.4 — no code; hook documented for when Spaces are added |
 | **Entity-friendly Qdrant payload** | ⏳ Optional | §8.1 — beyond `entity_ids` + optional `entity_labels`; not implemented |
 | **Expansion depth** | ⏳ Future | One-hop only; `depth` parameter reserved for multi-hop |
@@ -213,7 +213,7 @@ Query
 
 ## 7. Implementation status (verified in code)
 
-- **knowledge_graph.py:** `ENTITY_REL_TYPES`, `USER_ENTITY_REL_TYPES`, `FACT_DERIVATION_TABLE`; Fact/Evidence schema; `upsert_fact()`, `create_evidence()`, `_derive_user_entity_from_facts()`; `ingest_memory(..., facts=, evidence_events=)` writes Fact/Evidence and derives User–Entity; `ingest_from_unified_extraction(user_id, session_id, memory_ids, extraction)` for session pipeline; canonical_name/composite_key; `resolve_entity_candidates`; `expand_from_entities`; `delete_memory`; `create_user_entity_relationship(..., confidence=)`.
+- **knowledge_graph.py:** `ENTITY_REL_TYPES`, `USER_ENTITY_REL_TYPES`, `FACT_DERIVATION_TABLE`; Fact/Evidence schema; `upsert_fact()`, `create_evidence()`, `upsert_fact_from_ui()` (step 7); `_derive_user_entity_from_facts()`; `ingest_memory(..., facts=, evidence_events=)` writes Fact/Evidence and derives User–Entity; `ingest_from_unified_extraction()` for session pipeline; optional `space_id` on `create_memory()` and `upsert_fact()` (step 6); `last_confirmed_at` set when source_mode=ui_edit; canonical_name/composite_key; `resolve_entity_candidates`; `expand_from_entities`; `delete_memory`; `create_user_entity_relationship(..., confidence=)`.
 - **entity_extractor.py:** LLM extraction from memory text; `extract_from_query` for query NER; uses `entity_extraction` skill and model from config.
 - **memory_retriever.py:** `retrieve()` — semantic k=10; entity path independent; `result_ids` global dedupe; `_store_get_many`/`get_batch` for batch fetch; `expand_from_entities` and entity-first path both used.
 - **qdrant_store.py:** `_ingest_to_knowledge_graph` on add; when MNEMO_ENABLED uses unified extractor and `to_legacy_entity_result()`; else EntityExtractor; on delete calls `kg.delete_memory(memory_id)` when KG enabled.
@@ -226,6 +226,7 @@ Query
 - **routers/runs.py:** Calls `retrieve(...)` from memory_retriever for memory context.
 - **config/qdrant_config.yaml:** `indexed_payload_fields` includes `session_id`, `entity_labels` for arcturus_memories.
 - **core/skills/registry.json:** `entity_extraction` → `core/skills/library/entity_extraction`.
+- **routers/remme.py:** `PUT /remme/preferences/facts` for UI fact edits (step 7); `UpdateFactRequest`; requires MNEMO_ENABLED.
 - **scripts:** `migrate_memories_to_neo4j.py`, `migrate_all_memories.py` (docker/cloud modes) present and wired.
 
 ---
@@ -243,6 +244,10 @@ Use this section as the single list of what to do next; update as you complete i
 **Step 4 (Adapter):** Done. `memory/neo4j_preferences_adapter.py` — `build_preferences_from_neo4j(user_id)` reads Facts from Neo4j via `kg.get_facts_for_user()` and `kg.get_evidence_count_for_user()`, maps Fact namespace+key to hub-shaped response (output_contract, operating_context, soft_identity, evidence, meta), resolves conflicts by confidence and last_seen_at. `GET /remme/preferences` uses adapter when MNEMO_ENABLED; fallback to JSON hubs when disabled. `get_remme_profile` also uses adapter when MNEMO_ENABLED for profile prompt context.
 
 **Step 5 (Migration):** Done. `scripts/migrate_hubs_to_neo4j.py` loads `preferences_hub.json`, `operating_context_hub.json`, `soft_identity_hub.json` from `memory/user_model/`, maps hub fields to Fact `(namespace, key, value)` with `source_mode=migration`, upserts Facts and creates Evidence nodes. Usage: `uv run python scripts/migrate_hubs_to_neo4j.py` or `--dry-run`. Null/empty values skipped. Add to §9.3 migrations list as needed.
+
+**Step 6 (Spaces):** Done (schema preparation). Optional `space_id` added to `create_memory()` and `upsert_fact()` so Fact and Memory nodes can accept space_id when Spaces are implemented. No retrieval scoping yet; reserved for Phase 3.
+
+**Step 7 (UI edit pipeline):** Done (backend only). `knowledge_graph.upsert_fact_from_ui()`: upserts Fact with `source_mode=ui_edit`, `confidence=1.0`, `last_confirmed_at`; creates Evidence with `source_type=ui_edit`; re-runs derivation. `PUT /remme/preferences/facts` accepts `UpdateFactRequest` (namespace, key, value_type, value/value_text/etc, optional entity_ref, space_id); requires MNEMO_ENABLED. No UI changes yet; backend ready for future frontend.
 
 ### 8.1 Optional: Entity-friendly payload in Qdrant
 
@@ -265,9 +270,9 @@ Use this section as the single list of what to do next; update as you complete i
 - **UI and existing consumers:** Keep the current UX “more or less” the same by adding an **adapter or service layer** that reads from Qdrant/Neo4j (and optionally from existing JSON for backward compatibility) and exposes the same or similar structure that the UI and hubs expect (e.g. same categories, same field names). Over time, the UI can be pointed only at the new store.
 - **Extraction pipeline:** As in 8.2, the session-level extractor would output memories, preferences, and entities; the ingestion path would write preferences into the new store (and optionally still to JSON for a transition period). This may require mapping current hub schema (e.g. dietary_style, verbosity) to entities/concepts and user_facts (e.g. PREFERS → Concept "vegetarian") so that both the graph and the UI stay consistent.
 
-### 8.4 Space / space_id — reserved (do not implement yet)
+### 8.4 Space / space_id — schema ready (retrieval scoping deferred)
 
-- **Context:** Mnemo spec includes Spaces/Collections. The graph is currently scoped by `user_id` and `session_id` only; there is no space dimension. When Spaces are introduced, cross-project retrieval could become noisy without scoping.
+- **Context:** Mnemo spec includes Spaces/Collections. Optional `space_id` added to `create_memory()` and `upsert_fact()` (step 6). Retrieval scoping by space not yet implemented.
 - **Reserved design (no code yet):**
   - **Option A:** Add `(:Memory)-[:IN_SPACE]->(:Space)` and a `Space` node; constrain all retrieval paths (entities for user, expand, resolve) to memories in the requested space(s).
   - **Option B:** Add `space_id` as a property on `Memory` and filter queries with `WHERE m.space_id = $space_id` (or `IN $space_ids`).

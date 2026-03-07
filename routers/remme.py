@@ -29,6 +29,20 @@ class AddMemoryRequest(BaseModel):
     category: str = "general"
 
 
+class UpdateFactRequest(BaseModel):
+    """Request body for UI-driven fact edit (step 7). All fields except namespace, key, value_type are optional."""
+    namespace: str
+    key: str
+    value_type: str = "text"  # text | number | bool | json
+    value: str | float | bool | list | dict | None = None
+    value_text: str | None = None
+    value_number: float | None = None
+    value_bool: bool | None = None
+    value_json: list | dict | None = None
+    entity_ref: str | None = None
+    space_id: str | None = None
+
+
 # === Background Tasks ===
 
 async def background_smart_scan():
@@ -513,6 +527,46 @@ A high-level overview of who the user appears to be, their primary drivers, and 
             "evidence_count": context_data['meta']['total_evidence'] if 'context_data' in locals() else 0
         }
         
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/preferences/facts")
+async def update_fact(request: UpdateFactRequest):
+    """Update or create a fact from UI (step 7). Requires MNEMO_ENABLED. Backend-ready; no UI changes yet."""
+    try:
+        from memory.mnemo_config import is_mnemo_enabled
+        if not is_mnemo_enabled():
+            raise HTTPException(
+                status_code=501,
+                detail="UI fact edits require MNEMO_ENABLED=true. Use legacy JSON hubs when disabled.",
+            )
+        from memory.user_id import get_user_id
+        from memory.knowledge_graph import get_knowledge_graph
+        kg = get_knowledge_graph()
+        if not kg or not getattr(kg, "enabled", False):
+            raise HTTPException(status_code=503, detail="Neo4j knowledge graph not available.")
+        user_id = get_user_id()
+        fid = kg.upsert_fact_from_ui(
+            user_id=user_id,
+            namespace=request.namespace,
+            key=request.key,
+            value_type=request.value_type,
+            value=request.value,
+            value_text=request.value_text,
+            value_number=request.value_number,
+            value_bool=request.value_bool,
+            value_json=request.value_json,
+            entity_ref=request.entity_ref,
+            space_id=request.space_id,
+        )
+        if not fid:
+            raise HTTPException(status_code=400, detail="Failed to upsert fact.")
+        return {"status": "success", "fact_id": fid}
+    except HTTPException:
+        raise
     except Exception as e:
         import traceback
         traceback.print_exc()

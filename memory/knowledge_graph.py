@@ -219,20 +219,23 @@ class KnowledgeGraph:
         session_id: str,
         category: str = "general",
         source: str = "manual",
+        space_id: Optional[str] = None,
     ) -> None:
-        """Create Memory node and link to User and Session."""
+        """Create Memory node and link to User and Session. Optional space_id for future Spaces support (step 6)."""
         self.get_or_create_user(user_id)
         self.get_or_create_session(session_id)
+        create_extras = ", m.space_id = $space_id" if space_id else ""
+        match_extras = ", m.space_id = $space_id" if space_id else ""
         self._run_write(
-            """
-            MERGE (m:Memory {id: $mid})
+            f"""
+            MERGE (m:Memory {{id: $mid}})
             ON CREATE SET
                 m.category = $category,
                 m.source = $source,
-                m.created_at = datetime()
+                m.created_at = datetime(){create_extras}
             ON MATCH SET
                 m.category = $category,
-                m.source = $source
+                m.source = $source{match_extras}
             WITH m
             MATCH (u:User {user_id: $user_id})
             MERGE (u)-[:HAS_MEMORY]->(m)
@@ -246,6 +249,7 @@ class KnowledgeGraph:
                 "session_id": session_id,
                 "category": category,
                 "source": source,
+                **({"space_id": space_id} if space_id else {}),
             },
         )
 
@@ -395,20 +399,43 @@ class KnowledgeGraph:
         confidence: float = 0.8,
         source_mode: str = "extraction",
         entity_ref: Optional[str] = None,
+        space_id: Optional[str] = None,
     ) -> Optional[str]:
         """
         Create or update a Fact node. Idempotent by (user_id, namespace, key).
         Returns fact id (Neo4j node id or internal id) or None.
+        Optional space_id for future Spaces support (step 6).
+        For source_mode=ui_edit, sets last_confirmed_at.
         """
         if not self._enabled or not namespace or not key:
             return None
         fact_id = str(uuid.uuid4())
         now = datetime.utcnow().isoformat() + "Z"
+        is_ui_edit = (source_mode or "extraction") == "ui_edit"
+        confirmed_clause = ", f.last_confirmed_at = $now" if is_ui_edit else ""
+        space_clause = ""
+        params: Dict[str, Any] = {
+            "user_id": user_id,
+            "namespace": namespace,
+            "key": key,
+            "fact_id": fact_id,
+            "value_type": value_type or "text",
+            "value_text": value_text,
+            "value_number": value_number,
+            "value_bool": value_bool,
+            "value_json": json.dumps(value_json) if isinstance(value_json, (dict, list)) else (str(value_json) if value_json is not None else None),
+            "confidence": confidence,
+            "source_mode": source_mode or "extraction",
+            "now": now,
+        }
+        if space_id:
+            space_clause = ", f.space_id = $space_id"
+            params["space_id"] = space_id
         self._run_write(
-            """
-            MERGE (u:User {user_id: $user_id})
+            f"""
+            MERGE (u:User {{user_id: $user_id}})
             WITH u
-            MERGE (f:Fact {user_id: $user_id, namespace: $namespace, key: $key})
+            MERGE (f:Fact {{user_id: $user_id, namespace: $namespace, key: $key}})
             ON CREATE SET
                 f.id = $fact_id,
                 f.value_type = $value_type,
@@ -419,7 +446,7 @@ class KnowledgeGraph:
                 f.confidence = $confidence,
                 f.source_mode = $source_mode,
                 f.first_seen_at = $now,
-                f.last_seen_at = $now
+                f.last_seen_at = $now{confirmed_clause}{space_clause}
             ON MATCH SET
                 f.value_type = $value_type,
                 f.value_text = $value_text,
@@ -428,24 +455,11 @@ class KnowledgeGraph:
                 f.value_json = $value_json,
                 f.confidence = $confidence,
                 f.source_mode = $source_mode,
-                f.last_seen_at = $now
+                f.last_seen_at = $now{confirmed_clause}{space_clause}
             WITH f, u
             MERGE (u)-[:HAS_FACT]->(f)
             """,
-            {
-                "user_id": user_id,
-                "namespace": namespace,
-                "key": key,
-                "fact_id": fact_id,
-                "value_type": value_type or "text",
-                "value_text": value_text,
-                "value_number": value_number,
-                "value_bool": value_bool,
-                "value_json": json.dumps(value_json) if isinstance(value_json, (dict, list)) else (str(value_json) if value_json is not None else None),
-                "confidence": confidence,
-                "source_mode": source_mode or "extraction",
-                "now": now,
-            },
+            params,
         )
         if entity_ref:
             # Resolve entity_ref (composite_key "Type::name" or entity id) and create Fact-REFERS_TO-Entity
@@ -530,6 +544,78 @@ class KnowledgeGraph:
                 """,
                 {"evidence_id": evidence_id, "memory_id": memory_id},
             )
+
+    def upsert_fact_from_ui(
+        self,
+        user_id: str,
+        namespace: str,
+        key: str,
+        value_type: str = "text",
+        value: Optional[Any] = None,
+        value_text: Optional[str] = None,
+        value_number: Optional[float] = None,
+        value_bool: Optional[bool] = None,
+        value_json: Optional[Any] = None,
+        entity_ref: Optional[str] = None,
+        space_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """
+        UI-driven fact edit (step 7): upsert Fact, create Evidence with source_type=ui_edit,
+        set source_mode=ui_edit, confidence=1.0, last_confirmed_at, and re-run derivation.
+        Value can be provided as `value` (single field) or as value_text/value_number/value_bool/value_json.
+        Returns fact id or None.
+        """
+        if not self._enabled or not namespace or not key:
+            return None
+        vt = (value_type or "text").lower()
+        v = value
+        vt_text = value_text
+        vt_num = value_number
+        vt_bool = value_bool
+        vt_json = value_json
+        if v is not None:
+            if vt == "text":
+                vt_text = str(v)
+            elif vt == "number":
+                vt_num = float(v) if isinstance(v, (int, float)) else None
+            elif vt == "bool":
+                vt_bool = bool(v)
+            elif vt == "json":
+                vt_json = v if isinstance(v, (dict, list)) else None
+        fid = self.upsert_fact(
+            user_id=user_id,
+            namespace=namespace,
+            key=key,
+            value_type=vt or "text",
+            value_text=vt_text,
+            value_number=vt_num,
+            value_bool=vt_bool,
+            value_json=vt_json,
+            confidence=1.0,
+            source_mode="ui_edit",
+            entity_ref=entity_ref,
+            space_id=space_id,
+        )
+        if not fid:
+            return None
+        ev_id = str(uuid.uuid4())
+        now = datetime.utcnow().isoformat() + "Z"
+        self.create_evidence(
+            evidence_id=ev_id,
+            source_type="ui_edit",
+            source_ref="ui_edit",
+            user_id=user_id,
+            namespace=namespace,
+            key=key,
+            timestamp=now,
+        )
+        fact_dict = {
+            "namespace": namespace,
+            "key": key,
+            "entity_ref": entity_ref,
+        }
+        self._derive_user_entity_from_facts(user_id, [fact_dict], {})
+        return fid
 
     def _derive_user_entity_from_facts(
         self,
