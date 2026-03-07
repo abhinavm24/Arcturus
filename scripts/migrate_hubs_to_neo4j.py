@@ -86,10 +86,8 @@ def extract_facts_from_preferences(data: Dict[str, Any]) -> List[Tuple[str, str,
             facts.append(("preferences.output_contract", "format.default", f.default, "text", _conf(f)))
 
         tone = oc.get("tone_constraints", [])
-        if isinstance(tone, list):
-            for t in tone:
-                if t:
-                    facts.append(("preferences.output_contract", "tone", t, "text", meta_conf))
+        if isinstance(tone, list) and tone:
+            facts.append(("preferences.output_contract", "tone", [t for t in tone if t], "json", meta_conf))
 
         qp = oc.get("questions_policy", {})
         c = qp.get("clarifications") if isinstance(qp, dict) else getattr(qp, "clarifications", None)
@@ -108,12 +106,12 @@ def extract_facts_from_preferences(data: Dict[str, Any]) -> List[Tuple[str, str,
                 facts.append(("tooling.package_manager", "javascript", js_, "text", meta_conf))
         fw = tooling.get("frameworks", {})
         if isinstance(fw, dict):
-            for x in fw.get("frontend", []) or []:
-                if x:
-                    facts.append(("preferences", "frameworks_frontend", x, "text", meta_conf))
-            for x in fw.get("backend", []) or []:
-                if x:
-                    facts.append(("preferences", "frameworks_backend", x, "text", meta_conf))
+            fe = [x for x in (fw.get("frontend", []) or []) if x]
+            if fe:
+                facts.append(("preferences", "frameworks_frontend", fe, "json", meta_conf))
+            be = [x for x in (fw.get("backend", []) or []) if x]
+            if be:
+                facts.append(("preferences", "frameworks_backend", be, "json", meta_conf))
 
     return facts
 
@@ -138,9 +136,9 @@ def extract_facts_from_operating_context(data: Dict[str, Any]) -> List[Tuple[str
     if dev:
         pl = dev.get("primary_languages", {})
         ranked = pl.get("ranked", []) if isinstance(pl, dict) else getattr(pl, "ranked", [])
-        for lang in ranked or []:
-            if lang:
-                facts.append(("operating.context", "primary_languages", lang, "text", meta_conf))
+        langs = [x for x in (ranked or []) if x]
+        if langs:
+            facts.append(("operating.context", "primary_languages", langs, "json", meta_conf))
 
     return facts
 
@@ -158,15 +156,15 @@ def extract_facts_from_soft_identity(data: Dict[str, Any]) -> List[Tuple[str, st
             facts.append(("identity.food", "dietary_style", ds_val, "text", _conf(ds)))
         ca = fd.get("cuisine_affinities", {})
         if isinstance(ca, dict):
-            for x in ca.get("likes", []) or []:
-                if x:
-                    facts.append(("identity.food", "cuisine_likes", x, "text", meta_conf))
-            for x in ca.get("dislikes", []) or []:
-                if x:
-                    facts.append(("identity.food", "cuisine_dislikes", x, "text", meta_conf))
-            for x in ca.get("favorites", []) or []:
-                if x:
-                    facts.append(("identity.food", "favorite_foods", x, "text", meta_conf))
+            likes = [x for x in (ca.get("likes", []) or []) if x]
+            if likes:
+                facts.append(("identity.food", "cuisine_likes", likes, "json", meta_conf))
+            dislikes = [x for x in (ca.get("dislikes", []) or []) if x]
+            if dislikes:
+                facts.append(("identity.food", "cuisine_dislikes", dislikes, "json", meta_conf))
+            favs = [x for x in (ca.get("favorites", []) or []) if x]
+            if favs:
+                facts.append(("identity.food", "favorite_foods", favs, "json", meta_conf))
 
     pa = data.get("pets_and_animals", {})
     if pa:
@@ -175,19 +173,22 @@ def extract_facts_from_soft_identity(data: Dict[str, Any]) -> List[Tuple[str, st
         if aff_val:
             facts.append(("identity", "pet_affinity", aff_val, "text", _conf(aff)))
         own = pa.get("ownership", {})
-        for name in (own.get("pet_names", []) or []) if isinstance(own, dict) else (getattr(own, "pet_names", []) or []):
-            if name:
-                facts.append(("identity", "pet_names", name, "text", meta_conf))
+        pnames = (own.get("pet_names", []) or []) if isinstance(own, dict) else (getattr(own, "pet_names", []) or [])
+        pnames = [x for x in pnames if x]
+        if pnames:
+            facts.append(("identity", "pet_names", pnames, "json", meta_conf))
 
     me = data.get("media_and_entertainment", {})
     if me:
-        for genre in (me.get("music", {}).get("genres", []) or []) if isinstance(me.get("music"), dict) else (getattr(me.get("music"), "genres", []) or []):
-            if genre:
-                facts.append(("identity", "music_genres", genre, "text", meta_conf))
+        music_genres = (me.get("music", {}).get("genres", []) or []) if isinstance(me.get("music"), dict) else (getattr(me.get("music"), "genres", []) or [])
+        music_genres = [x for x in music_genres if x]
+        if music_genres:
+            facts.append(("identity", "music_genres", music_genres, "json", meta_conf))
         mt = me.get("movies_tv", {})
-        for genre in (mt.get("genres", []) or []) if isinstance(mt, dict) else (getattr(mt, "genres", []) or []):
-            if genre:
-                facts.append(("identity", "movie_genres", genre, "text", meta_conf))
+        movie_genres = (mt.get("genres", []) or []) if isinstance(mt, dict) else (getattr(mt, "genres", []) or [])
+        movie_genres = [x for x in movie_genres if x]
+        if movie_genres:
+            facts.append(("identity", "movie_genres", movie_genres, "json", meta_conf))
 
     cs = data.get("communication_style", {})
     if cs:
@@ -202,18 +203,18 @@ def extract_facts_from_soft_identity(data: Dict[str, Any]) -> List[Tuple[str, st
 
     ih = data.get("interests_and_hobbies", {})
     if ih:
-        for x in (ih.get("professional_interests", []) or []):
-            if x:
-                facts.append(("identity", "professional_interests", x, "text", meta_conf))
-        for x in (ih.get("personal_hobbies", []) or []):
-            if x:
-                facts.append(("identity", "personal_hobbies", x, "text", meta_conf))
-        for x in (ih.get("learning_interests", []) or []):
-            if x:
-                facts.append(("identity", "learning_interests", x, "text", meta_conf))
-        for x in (ih.get("side_projects", []) or []):
-            if x:
-                facts.append(("identity", "side_projects", x, "text", meta_conf))
+        prof = [x for x in (ih.get("professional_interests", []) or []) if x]
+        if prof:
+            facts.append(("identity", "professional_interests", prof, "json", meta_conf))
+        hobbies = [x for x in (ih.get("personal_hobbies", []) or []) if x]
+        if hobbies:
+            facts.append(("identity", "personal_hobbies", hobbies, "json", meta_conf))
+        learn = [x for x in (ih.get("learning_interests", []) or []) if x]
+        if learn:
+            facts.append(("identity", "learning_interests", learn, "json", meta_conf))
+        side = [x for x in (ih.get("side_projects", []) or []) if x]
+        if side:
+            facts.append(("identity", "side_projects", side, "json", meta_conf))
 
     pc = data.get("professional_context", {})
     if pc:
