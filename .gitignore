@@ -95,3 +95,7 @@ S15A.egg-info/
 # Added by Arcturus
 .arcturus/
 .arcturus
+
+# PR Body Drafts
+scripts/github/PR_Body_*.md
+scripts/github/Pr_Body_*.md
