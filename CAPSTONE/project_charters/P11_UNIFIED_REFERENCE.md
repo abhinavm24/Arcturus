@@ -1,10 +1,12 @@
 # P11 Mnemo — Unified Project Reference
 
-**Use this file** when starting a new chat or when you need full context: it combines the project charter, delivery scope, Neo4j knowledge graph design, and current implementation status in **one self-contained place**. All details are inlined here (no need to open the design doc or explanation for remaining work). Update **§2 Status at a glance** and **§8 Remaining / next steps** as work progresses.
+**Use this file** when starting a new chat or when you need full context: it combines the project charter, delivery scope, Neo4j knowledge graph design, unified extraction design, and current implementation status in **one self-contained place**. All details are inlined here. For future phases (Phase 3, 4, 5), **attach only this file** — no need for `p11_unified_extraction_design.md` or other design docs.
+
+Update **§2 Status at a glance** and **§8 Remaining / next steps** as work progresses.
 
 **Do not modify:** `P11_DELIVERY_README.md` (required by project; keep as-is).
 
-**Original sources (attribution only):** `P11_EXPLANATION.md`, `P11_DELIVERY_README.md`, `P11_NEO4J_KNOWLEDGE_GRAPH_DESIGN.md`.
+**Original sources (attribution only):** `P11_EXPLANATION.md`, `P11_DELIVERY_README.md`, `P11_NEO4J_KNOWLEDGE_GRAPH_DESIGN.md`, `p11_unified_extraction_design.md`.
 
 ---
 
@@ -22,15 +24,16 @@
 |------|--------|------|
 | **Phase 1: FAISS → Qdrant** | ✅ Done | Vector store abstraction, Qdrant backend, migration scripts, setup guide |
 | **Phase 2/3: Neo4j knowledge graph** | ✅ Core done | Schema, ingestion, dual-path retrieval, backfill; see §7 for details |
+| **Phase 2.5: Unified extractor (field_id)** | ✅ Done | Registry-owned canonical facts; LLM emits field_id only; see §6.7 |
 | **Retrieval gap (semantic returns 0)** | ✅ Addressed | Entity-first path runs independently; k=10; graph expansion; multi-tenant safe |
 | **Memory delete & orphan cleanup** | ✅ Done | `delete_memory` in `knowledge_graph.py`; qdrant_store calls it on delete |
-| **Session-level extraction** | ⏳ Not done | §8.2 — one pass for memories + preferences + entities from session |
-| **Preferences unification** | ✅ Done | Steps 1–7 done; backend ready for UI edits |
-| **Spaces / space_id** | ⏳ Reserved | §8.4 — no code; hook documented for when Spaces are added |
-| **Entity-friendly Qdrant payload** | ⏳ Optional | §8.1 — beyond `entity_ids` + optional `entity_labels`; not implemented |
+| **Preferences unification** | ✅ Done | Fact/Evidence, adapter, migration; backend ready for UI edits |
+| **Session-level extraction** | ⏳ Phase 3/4 | One pass for memories + preferences + entities from session |
+| **Spaces / space_id** | ⏳ Phase 3 | Schema ready; retrieval scoping deferred |
+| **UI edit (frontend + backend)** | ⏳ Phase 5 | Backend ready; frontend deferred |
+| **Entity-friendly Qdrant payload** | ⏳ Optional | §8.1 — beyond `entity_ids` + optional `entity_labels` |
 | **Expansion depth** | ⏳ Future | One-hop only; `depth` parameter reserved for multi-hop |
-| **Spaces, sync, lifecycle, frontend** | ⏳ Deferred | Per delivery README |
-| **user_id: FE ownership** | ⏳ Later phase | Move user_id generation & caching to frontend for server deployment; see §8.6 |
+| **user_id: FE ownership** | ⏳ Phase 5 | Move user_id to frontend for server deployment; see §8.6 |
 
 ---
 
@@ -46,9 +49,10 @@
 
 - **Phase 1:** FAISS → Qdrant (cloud-capable vector store). **Done.**
 - **Phase 2/3:** Neo4j knowledge graph (entities, relationships, dual-path retrieval). **Core done.**
-- **Phase 3 (Spaces):** Spaces/collections. **Deferred.**
+- **Phase 2.5:** Unified extractor with registry-owned fact identity (field_id). **Done.**
+- **Phase 3:** Spaces/collections; session-level extraction. **Deferred.**
 - **Phase 4:** Cross-device sync (CRDT). **Deferred.**
-- **Phase 5:** Lifecycle (importance, archival, contradiction resolution). **Deferred.**
+- **Phase 5:** UI edit frontend, lifecycle (importance, archival, contradiction resolution), user_id FE ownership. **Deferred.**
 
 **Current systems (pre-Mnemo):**
 
@@ -85,6 +89,16 @@
 - Env: `NEO4J_ENABLED=true`, `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD`
 - RAG chunks: backfill to Qdrant supported
 
+**Phase 2.5 (Unified extractor, field_id)**
+
+- `memory/fact_field_registry.py` — field_id → namespace, key, value_type, append, hub_path; `get_field_def`, `get_valid_field_ids`, `resolve_field_id_to_canonical`, `get_fact_to_hub_mappings`
+- `memory/fact_normalizer.py` — Resolves field_id via registry; unknown → extras; list merge
+- `memory/unified_extraction_schema.py` — FactItem with field_id (required); `_derive_user_facts_from_facts` uses registry
+- `memory/unified_extractor.py` — `_normalize_facts` expects field_id; prompt injects `{{VALID_FIELD_IDS}}`
+- `core/skills/library/unified_extraction/SKILL.md` — field_id-only facts; valid field_ids from registry
+- `memory/neo4j_preferences_adapter.py` — `FACT_TO_HUB_PATH` derived from registry
+- `knowledge_graph.py` — `merge_list_fact`, normalizer used in ingest_memory and ingest_from_unified_extraction
+
 ### 4.2 Deferred (from delivery README)
 
 - Session-level extraction (§8.2), preferences unification (§8.3), Spaces/collections (§8.4), sync, lifecycle, frontend (graph explorer, spaces manager), performance tuning (e.g. retrieval P95 < 250ms benchmark).
@@ -112,6 +126,12 @@ memory/memory_retriever.py          — Dual-path retrieval (semantic + entity),
 core/skills/library/entity_extraction/ — Entity extraction skill (SKILL.md, skill.py, registry)
 scripts/migrate_memories_to_neo4j.py — Qdrant → Neo4j backfill
 scripts/migrate_all_memories.py     — All migrations in order (FAISS→Qdrant memories, RAG→Qdrant, Qdrant→Neo4j)
+
+# Phase 2.5 (Unified extractor, field_id)
+memory/fact_field_registry.py       — field_id as canonical; FIELD_DEFS, get_field_def, get_valid_field_ids, resolve_field_id_to_canonical
+memory/fact_normalizer.py           — normalize_facts(facts with field_id) → canonical (namespace, key) from registry
+memory/unified_extraction_schema.py — FactItem(field_id, ...); _derive_user_facts_from_facts
+core/skills/library/unified_extraction/ — SKILL.md with {{VALID_FIELD_IDS}}
 ```
 
 ### 5.2 Data flow
@@ -209,6 +229,30 @@ Query
 
 1. Neo4j client + schema → 2. Entity extraction pipeline → 3. Ingestion on memory add → 4. Qdrant payload (user_id, session_id, entity_ids) → 5. Retrieval (Qdrant + Neo4j expansion) → 6. Migration script (backfill).
 
+### 6.7 Phase 2.5: field_id as canonical fact identity (Done)
+
+**Core principle:** The LLM must NOT invent canonical storage coordinates (namespace, key). Canonical fact identity is fully owned by the code registry, not the model.
+
+**Architecture:**
+
+- **`field_id`** is the only canonical selector. LLM returns `{ "field_id": "personal_hobbies", "value": ["Running"], "value_type": "json" }` — never namespace or key.
+- **`memory/fact_field_registry.py`** — Single source of truth. Defines: `field_id` → `namespace`, `key`, `value_type`, `append`, `hub_path`, aliases. Functions: `get_field_def(field_id)`, `get_valid_field_ids()`, `resolve_field_id_to_canonical(field_id)`, `get_fact_to_hub_mappings()` (for adapter).
+- **`memory/fact_normalizer.py`** — Resolves facts via registry using `field_id`. Unknown `field_id` → log warning, route to `namespace=extras`, `key=field_id`. Merges list-valued facts by canonical (ns, key).
+- **`memory/unified_extraction_schema.py`** — `FactItem` has `field_id` (required), no namespace/key from model. `_derive_user_facts_from_facts()` uses registry to get namespace for rel_type.
+- **Extractor skill** — `core/skills/library/unified_extraction/SKILL.md`. Valid `field_id`s injected from `get_valid_field_ids()` via `{{VALID_FIELD_IDS}}` placeholder. LLM selects only from this list.
+- **Flow:** LLM extraction (field_id only) → fact_normalizer (registry lookup) → canonical (namespace, key) → Neo4j upsert. Adapter reads Facts from Neo4j (namespace, key) and maps via `get_fact_to_hub_mappings()`.
+
+**Old pipeline mapping (from design doc):**
+
+| Old | New |
+|-----|-----|
+| LLM invents namespace+key | LLM emits field_id only |
+| Normalizer maps raw→canonical | Registry owns canonical; normalizer resolves field_id |
+| Staging JSON | Removed; direct to Neo4j |
+| Unknown fields → extras | `namespace=extras`, `key=field_id` |
+
+**Tests:** `tests/unit/memory/test_fact_registry_and_normalizer.py`, `test_unified_extraction_schema.py`, `test_unified_extractor_normalize.py`, `test_neo4j_preferences_adapter_registry.py`, `test_fact_ingestion_pipeline.py`.
+
 ---
 
 ## 7. Implementation status (verified in code)
@@ -217,11 +261,13 @@ Query
 - **entity_extractor.py:** LLM extraction from memory text; `extract_from_query` for query NER; uses `entity_extraction` skill and model from config.
 - **memory_retriever.py:** `retrieve()` — semantic k=10; entity path independent; `result_ids` global dedupe; `_store_get_many`/`get_batch` for batch fetch; `expand_from_entities` and entity-first path both used.
 - **qdrant_store.py:** `_ingest_to_knowledge_graph` on add; when MNEMO_ENABLED uses unified extractor and `to_legacy_entity_result()`; else EntityExtractor; on delete calls `kg.delete_memory(memory_id)` when KG enabled.
-- **memory/unified_extraction_schema.py:** Pydantic models for UnifiedExtractionResult, FactItem, EvidenceEventItem, etc.; `to_legacy_entity_result()` for ingest_memory compatibility.
+- **memory/unified_extraction_schema.py:** Pydantic models for UnifiedExtractionResult, FactItem (field_id only, no namespace/key from model), EvidenceEventItem; `to_legacy_entity_result()`, `_derive_user_facts_from_facts()` uses registry.
 - **memory/unified_extractor.py:** UnifiedExtractor (extract_from_session, extract_from_memory_text); single LLM output schema.
 - **memory/mnemo_config.py:** `is_mnemo_enabled()` from MNEMO_ENABLED env.
 - **routers/runs.py**, **routers/remme.py:** Branch on `is_mnemo_enabled()`; Mnemo path uses get_unified_extractor(), no hub/staging writes.
-- **memory/neo4j_preferences_adapter.py:** `build_preferences_from_neo4j()` — Facts → hub-shaped response for GET /preferences.
+- **memory/neo4j_preferences_adapter.py:** `build_preferences_from_neo4j()`; `FACT_TO_HUB_PATH` from `get_fact_to_hub_mappings()`.
+- **memory/fact_field_registry.py:** FIELD_DEFS, get_field_def, get_valid_field_ids, resolve_field_id_to_canonical; ALIAS_TO_FIELD for adapter read path.
+- **memory/fact_normalizer.py:** normalize_facts(raw_facts) — field_id → canonical (namespace, key); unknown → extras.
 - **knowledge_graph.py:** `get_facts_for_user()`, `get_evidence_count_for_user()` for adapter.
 - **routers/runs.py:** Calls `retrieve(...)` from memory_retriever for memory context.
 - **config/qdrant_config.yaml:** `indexed_payload_fields` includes `session_id`, `entity_labels` for arcturus_memories.
@@ -237,7 +283,7 @@ Use this section as the single list of what to do next; update as you complete i
 
 **Step 1 (Neo4j schema Fact + Evidence):** Done. Fact and Evidence node types, relationships (User─HAS_FACT→Fact, Fact─SUPPORTED_BY→Evidence, Evidence─FROM_MEMORY→Memory, Evidence─FROM_SESSION→Session, Fact─REFERS_TO→Entity, Fact─SUPERSEDES→Fact), and constraints (Fact unique on `(user_id, namespace, key)`, Evidence unique on `id`) added in `memory/knowledge_graph.py`. User–Entity edges documented as derived from Fact+REFERS_TO (step 3); optional `confidence` on User–Entity for backward compatibility. SchemaField nodes deferred.
 
-**Step 2 (Unified extractor + feature flag):** Done. Pydantic schema in `memory/unified_extraction_schema.py` (UnifiedExtractionResult, FactItem, EvidenceEventItem, etc.). Unified extractor in `memory/unified_extractor.py`: `extract_from_session()`, `extract_from_memory_text()`, single LLM call producing memories, entities, entity_relationships, facts, evidence_events. Feature flag `MNEMO_ENABLED` in `memory/mnemo_config.py`; when true: runs.py and remme.py use unified extractor and do not write preferences to hubs/staging; qdrant_store uses unified extractor for ingestion and `to_legacy_entity_result()` for existing ingest_memory. When false: legacy RemMe extractor, normalizer, staging, JSON hubs. Deprecation notes in remme/extractor.py and remme/normalizer.py. `.env.example` documents MNEMO_ENABLED. GET /preferences unchanged (adapter in step 4).
+**Step 2 (Unified extractor + feature flag):** Done. Pydantic schema in `memory/unified_extraction_schema.py` (UnifiedExtractionResult, FactItem with **field_id only** — no namespace/key from model, EvidenceEventItem). Unified extractor in `memory/unified_extractor.py`; `memory/fact_field_registry.py` owns canonical fact identity; `memory/fact_normalizer.py` resolves field_id → (namespace, key). LLM emits field_id only; registry provides canonical coordinates. Feature flag `MNEMO_ENABLED`; when true: unified extractor, Neo4j Fact/Evidence, adapter. When false: legacy RemMe extractor, normalizer, staging, JSON hubs.
 
 **Step 3 (Ingestion pipelines):** Done. **knowledge_graph.py:** `upsert_fact()`, `create_evidence()`, `_derive_user_entity_from_facts()`, `FACT_DERIVATION_TABLE`. `ingest_memory()` accepts optional `facts` and `evidence_events`. `ingest_from_unified_extraction()` for session pipeline. **Session pipeline:** runs.py and remme.py call `kg.ingest_from_unified_extraction()`. **Direct memory add:** qdrant_store passes facts/evidence into `ingest_memory()`.
 
@@ -245,9 +291,9 @@ Use this section as the single list of what to do next; update as you complete i
 
 **Step 5 (Migration):** Done. `scripts/migrate_hubs_to_neo4j.py` loads `preferences_hub.json`, `operating_context_hub.json`, `soft_identity_hub.json` from `memory/user_model/`, maps hub fields to Fact `(namespace, key, value)` with `source_mode=migration`, upserts Facts and creates Evidence nodes. Usage: `uv run python scripts/migrate_hubs_to_neo4j.py` or `--dry-run`. Null/empty values skipped. Add to §9.3 migrations list as needed.
 
-**Step 6 (Spaces):** Done (schema preparation). Optional `space_id` added to `create_memory()` and `upsert_fact()` so Fact and Memory nodes can accept space_id when Spaces are implemented. No retrieval scoping yet; reserved for Phase 3.
+**Step 6 (Spaces):** Done (schema preparation). Optional `space_id` added to `create_memory()` and `upsert_fact()`. No retrieval scoping yet; reserved for Phase 3.
 
-**Step 7 (UI edit pipeline):** Done (backend only). `knowledge_graph.upsert_fact_from_ui()`: upserts Fact with `source_mode=ui_edit`, `confidence=1.0`, `last_confirmed_at`; creates Evidence with `source_type=ui_edit`; re-runs derivation. `PUT /remme/preferences/facts` accepts `UpdateFactRequest` (namespace, key, value_type, value/value_text/etc, optional entity_ref, space_id); requires MNEMO_ENABLED. No UI changes yet; backend ready for future frontend.
+**Step 7 (UI edit pipeline):** Backend done. `knowledge_graph.upsert_fact_from_ui()`, `PUT /remme/preferences/facts` with `UpdateFactRequest` (namespace, key, value_type, value/...). **Frontend deferred to Phase 5.**
 
 ### 8.1 Optional: Entity-friendly payload in Qdrant
 
@@ -285,11 +331,34 @@ Use this section as the single list of what to do next; update as you complete i
 - Retrieval P95 < 250ms: to be benchmarked.
 - Acceptance/integration tests: structural tests in place; feature-level tests (memory influences planner, cross-project retrieval) to be expanded per charter.
 
-### 8.6 user_id: frontend ownership (later phase, for server deployment)
+### 8.6 user_id: frontend ownership (Phase 5, for server deployment)
 
-- **Current:** `user_id` is created and maintained at server level (generation and caching on the backend).
-- **Target (standard practice for server env):** When the backend is deployed to a server environment, **user_id generation and caching should move to the frontend (FE)**. The FE should generate or obtain a stable user identifier (e.g. anonymous id or auth-derived id), persist it (e.g. localStorage / cookie), and send it with each request so the backend uses it only as an opaque tenant key (no server-side user_id generation or long-lived server cache). Backend remains stateless with respect to user identity.
-- **Scope:** Define contract (header or body field for `user_id`), FE changes to own generation and caching, backend to accept and use client-provided `user_id` only; remove or narrow server-side user_id creation/caching where present.
+- **Current:** `user_id` is created and maintained at server level.
+- **Target:** Move user_id generation and caching to the frontend. FE persists stable user id (localStorage/cookie) and sends with each request. Backend uses as opaque tenant key only.
+- **Scope:** Contract (header/body for `user_id`); FE owns generation; backend accepts client-provided `user_id` only.
+
+### 8.7 Phase 5: UI edit, lifecycle, user_id (consolidated remaining work)
+
+**Phase 5 items** (to implement when starting Phase 5):
+
+1. **UI edit (frontend)** — Build UI to edit preferences/facts. Backend ready: `PUT /remme/preferences/facts`, `UpdateFactRequest` (namespace, key, value_type, value). Adapter returns hub shape from Neo4j. UI must present canonical fields (from registry) for editing; display GET /preferences response.
+
+2. **UI edit flow (from design doc)** — On user edit: (1) upsert Fact with `source_mode=ui_edit`, `confidence=1.0`, `last_confirmed_at`; (2) create Evidence with `source_type=ui_edit`; (3) re-run derivation for User–Entity edges if edited fact implies entity relationship. Backend implements this; frontend calls the API.
+
+3. **user_id FE ownership** — See §8.6.
+
+4. **Lifecycle (optional)** — Importance, archival, contradiction resolution. CONTRADICTS relationship reserved in schema.
+
+5. **Other** — Expansion depth (multi-hop), Spaces retrieval scoping, graph explorer, spaces manager — per delivery README.
+
+### 8.8 Key design principles (from design doc, for future reference)
+
+1. **Neo4j = structured truth** — Entities, relationships, Facts, Evidence.
+2. **Qdrant = semantic recall** — Memory text, vector search. Not source of truth for profile.
+3. **Registry owns canonical fact identity** — LLM emits field_id only; never namespace/key.
+4. **Evidence explains why facts exist** — source_type, source_ref, timestamp.
+5. **Derived edges support retrieval** — User–Entity from Fact+REFERS_TO via FACT_DERIVATION_TABLE.
+6. **Adapter = read model** — GET /preferences builds hub shape from Neo4j Facts; JSON hubs no longer written.
 
 ---
 
@@ -330,8 +399,12 @@ Use this section as the single list of what to do next; update as you complete i
 | Knowledge graph | `memory/knowledge_graph.py` — `get_knowledge_graph()` when NEO4J_ENABLED |
 | Retrieval entrypoint | `memory/memory_retriever.retrieve()` called from `routers/runs.py` |
 | Entity extraction | `memory/entity_extractor.py`; skill: `core/skills/library/entity_extraction/` |
+| Unified extraction (field_id) | `memory/unified_extractor.py`; skill: `core/skills/library/unified_extraction/` |
+| Fact field registry | `memory/fact_field_registry.py` — get_field_def, get_valid_field_ids |
+| Fact normalizer | `memory/fact_normalizer.py` — normalize_facts() |
+| Preferences adapter | `memory/neo4j_preferences_adapter.py` — build_preferences_from_neo4j() |
 | Qdrant config | `config/qdrant_config.yaml`; loader: `memory/qdrant_config.py` |
 | Delivery checklist (fixed) | `CAPSTONE/project_charters/P11_DELIVERY_README.md` |
 | Setup (Qdrant, Neo4j) | `CAPSTONE/project_charters/P11_mnemo_SETUP_GUIDE.md` |
 
-**Continue in a new chat:** Attach this file and say: *"Continue from P11_UNIFIED_REFERENCE.md"* or *"Implement [item] from §8 Remaining / next steps."*
+**Continue in a new chat:** Attach this file only and say: *"Continue from P11_UNIFIED_REFERENCE.md"* or *"Implement [Phase 5 item] from §8.7."*
