@@ -146,14 +146,25 @@ class KnowledgeGraph:
                 "CREATE CONSTRAINT memory_id IF NOT EXISTS FOR (m:Memory) REQUIRE m.id IS UNIQUE",
                 "CREATE CONSTRAINT session_id IF NOT EXISTS FOR (s:Session) REQUIRE s.session_id IS UNIQUE",
                 "CREATE CONSTRAINT entity_key IF NOT EXISTS FOR (e:Entity) REQUIRE e.composite_key IS UNIQUE",
-                # Fact: one row per (user_id, namespace, key) for upsert; Evidence: unique id
-                "CREATE CONSTRAINT fact_user_ns_key IF NOT EXISTS FOR (f:Fact) REQUIRE (f.user_id, f.namespace, f.key) IS UNIQUE",
+                # Evidence: unique id
                 "CREATE CONSTRAINT evidence_id IF NOT EXISTS FOR (ev:Evidence) REQUIRE ev.id IS UNIQUE",
             ]:
                 try:
                     session.run(q)
                 except Exception:
                     pass  # constraint may already exist
+            # Phase 3B: Fact unique on (user_id, namespace, key, space_id). space_id null = global.
+            try:
+                session.run("DROP CONSTRAINT fact_user_ns_key IF EXISTS")
+            except Exception:
+                pass
+            try:
+                session.run(
+                    "CREATE CONSTRAINT fact_user_ns_space IF NOT EXISTS FOR (f:Fact) "
+                    "REQUIRE (f.user_id, f.namespace, f.key, f.space_id) IS UNIQUE"
+                )
+            except Exception:
+                pass
             session.run(
                 "CREATE INDEX entity_name_type IF NOT EXISTS FOR (e:Entity) ON (e.name, e.type)"
             )
@@ -459,9 +470,9 @@ class KnowledgeGraph:
         space_id: Optional[str] = None,
     ) -> Optional[str]:
         """
-        Create or update a Fact node. Idempotent by (user_id, namespace, key).
+        Create or update a Fact node. Idempotent by (user_id, namespace, key, space_id).
+        Phase 3B: space_id null = global; when provided, link (Fact)-[:IN_SPACE]->(Space).
         Returns fact id (Neo4j node id or internal id) or None.
-        Optional space_id for future Spaces support (step 6).
         For source_mode=ui_edit, sets last_confirmed_at.
         """
         if not self._enabled or not namespace or not key:
@@ -470,7 +481,7 @@ class KnowledgeGraph:
         now = datetime.utcnow().isoformat() + "Z"
         is_ui_edit = (source_mode or "extraction") == "ui_edit"
         confirmed_clause = ", f.last_confirmed_at = $now" if is_ui_edit else ""
-        space_clause = ""
+        use_space = space_id and space_id != SPACE_ID_GLOBAL
         # value_preview: short string for Neo4j Graph UI display (set for all Fact nodes so caption can use it)
         preview: Optional[str] = None
         vt = (value_type or "text").lower()
@@ -510,15 +521,13 @@ class KnowledgeGraph:
             "confidence": confidence,
             "source_mode": source_mode or "extraction",
             "now": now,
+            "space_id": space_id if use_space else None,
         }
-        if space_id:
-            space_clause = ", f.space_id = $space_id"
-            params["space_id"] = space_id
         self._run_write(
-            f"""
-            MERGE (u:User {{user_id: $user_id}})
+            """
+            MERGE (u:User {user_id: $user_id})
             WITH u
-            MERGE (f:Fact {{user_id: $user_id, namespace: $namespace, key: $key}})
+            MERGE (f:Fact {user_id: $user_id, namespace: $namespace, key: $key, space_id: $space_id})
             ON CREATE SET
                 f.id = $fact_id,
                 f.value_type = $value_type,
@@ -530,7 +539,8 @@ class KnowledgeGraph:
                 f.confidence = $confidence,
                 f.source_mode = $source_mode,
                 f.first_seen_at = $now,
-                f.last_seen_at = $now{confirmed_clause}{space_clause}
+                f.last_seen_at = $now
+                """ + confirmed_clause + """
             ON MATCH SET
                 f.value_type = $value_type,
                 f.value_text = $value_text,
@@ -540,10 +550,16 @@ class KnowledgeGraph:
                 f.value_preview = $value_preview,
                 f.confidence = $confidence,
                 f.source_mode = $source_mode,
-                f.last_seen_at = $now{confirmed_clause}{space_clause}
+                f.last_seen_at = $now
+                """ + confirmed_clause + """
             WITH f, u
             MERGE (u)-[:HAS_FACT]->(f)
-            """,
+            """
+            + ("""
+            WITH f
+            MATCH (sp:Space {space_id: $space_id})
+            MERGE (f)-[:IN_SPACE]->(sp)
+            """ if use_space else ""),
             params,
         )
         if entity_ref:
@@ -583,10 +599,11 @@ class KnowledgeGraph:
         key: str,
         values: List[Any],
         confidence: float = 0.8,
+        space_id: Optional[str] = None,
     ) -> bool:
         """
         Merge values into an existing list-valued Fact, or create it if missing.
-        Used by ingest after fact_normalizer produces canonical list facts.
+        Phase 3B: optional space_id for space-scoped facts.
         """
         if not self._enabled or not user_id or not namespace or not key:
             return False
@@ -597,12 +614,14 @@ class KnowledgeGraph:
                 valid.append(s)
         if not valid:
             return False
+        use_space = space_id and space_id != SPACE_ID_GLOBAL
+        params: Dict[str, Any] = {"user_id": user_id, "ns": namespace, "key": key, "space_id": space_id if use_space else None}
         records = self._run_query(
             """
-            MATCH (u:User {user_id: $user_id})-[:HAS_FACT]->(f:Fact {namespace: $ns, key: $key})
+            MATCH (u:User {user_id: $user_id})-[:HAS_FACT]->(f:Fact {namespace: $ns, key: $key, space_id: $space_id})
             RETURN properties(f) AS props
             """,
-            {"user_id": user_id, "ns": namespace, "key": key},
+            params,
         )
         if records:
             p = records[0].get("props") or {}
@@ -623,6 +642,7 @@ class KnowledgeGraph:
             value_json=current,
             confidence=confidence,
             source_mode="extraction",
+            space_id=space_id,
         )
         return True
 
@@ -637,31 +657,35 @@ class KnowledgeGraph:
         session_id: Optional[str] = None,
         memory_id: Optional[str] = None,
         timestamp: Optional[str] = None,
+        space_id: Optional[str] = None,
     ) -> None:
         """
-        Create Evidence node and link to Fact (SUPPORTED_BY) by (user_id, namespace, key),
-        optionally to Session (FROM_SESSION) and Memory (FROM_MEMORY). Evidence is append-only.
+        Create Evidence node and link to Fact (SUPPORTED_BY) by (user_id, namespace, key, space_id).
+        Phase 3B: space_id null = global Fact. Evidence is append-only.
         """
         if not self._enabled or not evidence_id or not user_id or not namespace or not key:
             return
         ts = timestamp or (datetime.utcnow().isoformat() + "Z")
+        use_space = space_id and space_id != SPACE_ID_GLOBAL
+        params: Dict[str, Any] = {
+            "evidence_id": evidence_id,
+            "source_type": source_type or "extraction",
+            "source_ref": source_ref,
+            "timestamp": ts,
+            "user_id": user_id,
+            "namespace": namespace,
+            "key": key,
+            "space_id": space_id if use_space else None,
+        }
         self._run_write(
             """
             MERGE (ev:Evidence {id: $evidence_id})
             ON CREATE SET ev.source_type = $source_type, ev.source_ref = $source_ref, ev.timestamp = $timestamp
             WITH ev
-            MATCH (f:Fact {user_id: $user_id, namespace: $namespace, key: $key})
+            MATCH (f:Fact {user_id: $user_id, namespace: $namespace, key: $key, space_id: $space_id})
             MERGE (f)-[:SUPPORTED_BY]->(ev)
             """,
-            {
-                "evidence_id": evidence_id,
-                "source_type": source_type or "extraction",
-                "source_ref": source_ref,
-                "timestamp": ts,
-                "user_id": user_id,
-                "namespace": namespace,
-                "key": key,
-            },
+            params,
         )
         if session_id:
             self._run_write(
@@ -886,6 +910,7 @@ class KnowledgeGraph:
         # Fact + Evidence (unified extraction path): normalize, upsert facts, create evidence
         if facts:
             from memory.fact_normalizer import normalize_facts
+            from memory.fact_field_registry import get_scope_for_namespace_key
 
             facts = normalize_facts(facts)
             for f in facts:
@@ -893,6 +918,8 @@ class KnowledgeGraph:
                 k = f.get("key", "")
                 if not ns or not k:
                     continue
+                # Phase 3B: pass space_id only for space-scoped facts
+                fact_space_id = space_id if (get_scope_for_namespace_key(ns, k) == "space" and space_id) else None
                 vt = f.get("value_type", "text")
                 val = f.get("value")
                 vt_text = f.get("value_text")
@@ -913,7 +940,7 @@ class KnowledgeGraph:
                 # List-valued facts: merge into existing, create evidence
                 if append:
                     vals = f.get("value_json") or (f.get("value") if isinstance(f.get("value"), list) else [f.get("value")] if f.get("value") is not None else [])
-                    if vals and self.merge_list_fact(user_id, ns, k, vals, confidence=0.8):
+                    if vals and self.merge_list_fact(user_id, ns, k, vals, confidence=0.8, space_id=fact_space_id):
                         ev_id = str(uuid.uuid4())
                         ev_source_ref = memory_id
                         ev_source_type = "extraction"
@@ -925,6 +952,7 @@ class KnowledgeGraph:
                             evidence_id=ev_id, source_type=ev_source_type, source_ref=ev_source_ref or memory_id,
                             user_id=user_id, namespace=ns, key=k,
                             session_id=session_id, memory_id=memory_id,
+                            space_id=fact_space_id,
                         )
                     continue
 
@@ -940,6 +968,7 @@ class KnowledgeGraph:
                     confidence=0.8,
                     source_mode="extraction",
                     entity_ref=entity_ref,
+                    space_id=fact_space_id,
                 )
                 ev_id = str(uuid.uuid4())
                 ev_source_ref = memory_id
@@ -961,6 +990,7 @@ class KnowledgeGraph:
                     key=k,
                     session_id=session_id,
                     memory_id=memory_id,
+                    space_id=fact_space_id,
                 )
             self._derive_user_entity_from_facts(
                 user_id,
@@ -1040,6 +1070,7 @@ class KnowledgeGraph:
                     source_memory_ids=memory_ids,
                 )
         from memory.fact_normalizer import normalize_facts
+        from memory.fact_field_registry import get_scope_for_namespace_key
 
         facts = normalize_facts(facts)
         for f in facts:
@@ -1047,6 +1078,8 @@ class KnowledgeGraph:
             k = f.get("key", "")
             if not ns or not k:
                 continue
+            # Phase 3B: pass space_id only for space-scoped facts
+            fact_space_id = space_id if (get_scope_for_namespace_key(ns, k) == "space" and space_id) else None
             vt = f.get("value_type", "text")
             val = f.get("value")
             vt_text = f.get("value_text")
@@ -1065,7 +1098,7 @@ class KnowledgeGraph:
             append = f.get("append", False)
             if append:
                 vals = f.get("value_json") or (f.get("value") if isinstance(f.get("value"), list) else [f.get("value")] if f.get("value") is not None else [])
-                if vals and self.merge_list_fact(user_id, ns, k, vals, confidence=0.8):
+                if vals and self.merge_list_fact(user_id, ns, k, vals, confidence=0.8, space_id=fact_space_id):
                     ev_id = str(uuid.uuid4())
                     ev_source_ref = session_id
                     ev_source_type = "extraction"
@@ -1077,6 +1110,7 @@ class KnowledgeGraph:
                         evidence_id=ev_id, source_type=ev_source_type, source_ref=ev_source_ref or session_id,
                         user_id=user_id, namespace=ns, key=k,
                         session_id=session_id, memory_id=memory_ids[0] if memory_ids else None,
+                        space_id=fact_space_id,
                     )
                 continue
             self.upsert_fact(
@@ -1091,6 +1125,7 @@ class KnowledgeGraph:
                 confidence=0.8,
                 source_mode="extraction",
                 entity_ref=entity_ref,
+                space_id=fact_space_id,
             )
             ev_id = str(uuid.uuid4())
             ev_source_ref = session_id
@@ -1109,6 +1144,7 @@ class KnowledgeGraph:
                 session_id=session_id,
                 memory_id=memory_ids[0] if memory_ids else None,
                 timestamp=None,
+                space_id=fact_space_id,
             )
         if facts:
             self._derive_user_entity_from_facts(user_id, facts, entity_map, source_memory_ids=memory_ids)
@@ -1282,23 +1318,39 @@ class KnowledgeGraph:
         )
         return records
 
-    def get_facts_for_user(self, user_id: str) -> List[Dict[str, Any]]:
+    def get_facts_for_user(
+        self,
+        user_id: str,
+        space_id: Optional[str] = None,
+        space_ids: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
         """
-        Get all Facts for a user. Used by the preferences adapter (step 4).
-        Returns list of dicts with namespace, key, value_type, value_text, value_number,
-        value_bool, value_json, confidence, last_seen_at. Resolve conflicts by confidence
-        and last_seen_at in the adapter.
+        Get Facts for a user. Phase 3B: optional space filter.
+        When space_id/space_ids provided: return global facts (space_id null) + facts in requested space(s).
+        When None: return all facts (backward compat).
         """
         if not self._enabled or not user_id:
             return []
-        # Use properties(f) so we only read keys that exist on each node; avoids Neo4j
-        # warnings for missing value_number/value_bool/value_json on text-only facts.
+        space_filter = ""
+        params: Dict[str, Any] = {"user_id": user_id}
+        if space_ids:
+            params["space_ids"] = [s for s in space_ids if s and s != SPACE_ID_GLOBAL]
+            if params["space_ids"]:
+                space_filter = """
+                WHERE f.space_id IS NULL OR f.space_id IN $space_ids
+                """
+        elif space_id and space_id != SPACE_ID_GLOBAL:
+            params["space_ids"] = [space_id]
+            space_filter = """
+            WHERE f.space_id IS NULL OR f.space_id IN $space_ids
+            """
         records = self._run_query(
             """
             MATCH (u:User {user_id: $user_id})-[:HAS_FACT]->(f:Fact)
+            """ + space_filter + """
             RETURN properties(f) AS props
             """,
-            {"user_id": user_id},
+            params,
         )
         out = []
         for r in records:

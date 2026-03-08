@@ -16,9 +16,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-# Field definition: (namespace, key, value_type, hub_path, append)
+# Field definition: (namespace, key, value_type, hub_path, append, scope)
 # hub_path: tuple for response path, e.g. ("soft_identity", "interests_and_hobbies", "personal_hobbies")
 # append: True if value should be merged into a list
+# scope: "global" | "space" — global facts valid everywhere; space-scoped facts per Space (Phase 3B)
 FIELD_DEFS: Dict[str, Dict[str, Any]] = {
     # preferences
     "verbosity.default": {
@@ -27,6 +28,7 @@ FIELD_DEFS: Dict[str, Dict[str, Any]] = {
         "value_type": "text",
         "hub_path": ("preferences", "output_contract", "verbosity"),
         "append": False,
+        "scope": "global",
     },
     "verbosity": {
         "namespace": "preferences.output_contract",
@@ -235,6 +237,11 @@ FIELD_DEFS: Dict[str, Dict[str, Any]] = {
     },
 }
 
+# Phase 3B: ensure all fields have scope (default "global")
+for _fid, _defn in FIELD_DEFS.items():
+    if "scope" not in _defn:
+        _defn["scope"] = "global"
+
 # Alias: (namespace, key) -> field_id (for adapter read path: Neo4j stores ns+key)
 ALIAS_TO_FIELD: Dict[Tuple[str, str], str] = {}
 for fid, defn in FIELD_DEFS.items():
@@ -262,6 +269,18 @@ def get_field_def(field_id: str) -> Optional[Dict[str, Any]]:
     return FIELD_DEFS.get(fid) if fid else None
 
 
+def get_field_scope(field_id: str) -> str:
+    """
+    Return scope for field: "global" or "space". Phase 3B.
+    Global facts valid everywhere; space-scoped facts per Space.
+    Defaults to "global" when not set.
+    """
+    defn = get_field_def(field_id)
+    if not defn:
+        return "global"
+    return (defn.get("scope") or "global").lower()
+
+
 def get_valid_field_ids() -> List[str]:
     """Return sorted list of valid field_ids for extractor prompt."""
     return sorted(FIELD_DEFS.keys())
@@ -282,6 +301,17 @@ def resolve_field_id_to_canonical(field_id: str) -> Optional[Tuple[str, str, str
         defn["hub_path"],
         defn["append"],
     )
+
+
+def get_scope_for_namespace_key(ns: str, key: str) -> str:
+    """Get scope for (namespace, key). Defaults to global. Phase 3B."""
+    field_id = ALIAS_TO_FIELD.get((ns, key))
+    if field_id:
+        return get_field_scope(field_id)
+    for fid, defn in FIELD_DEFS.items():
+        if defn.get("namespace") == ns and defn.get("key") == key:
+            return get_field_scope(fid)
+    return "global"
 
 
 def resolve_to_canonical(ns: str, key: str) -> Optional[Tuple[str, str, str, Tuple[str, ...], bool]]:

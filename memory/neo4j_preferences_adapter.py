@@ -113,12 +113,15 @@ def _default_hub_shape() -> Dict[str, Any]:
     }
 
 
-def build_preferences_from_neo4j(user_id: str) -> Dict[str, Any]:
+def build_preferences_from_neo4j(
+    user_id: str,
+    space_id: Optional[str] = None,
+    space_ids: Optional[List[str]] = None,
+) -> Dict[str, Any]:
     """
     Build the GET /remme/preferences response shape from Neo4j Facts.
-
-    Returns the same structure as the legacy hub-based response so the UI
-    and other consumers need no changes.
+    Phase 3B: optional space_id/space_ids filter. When provided, returns
+    global facts + facts in requested space(s).
     """
     from memory.knowledge_graph import get_knowledge_graph
     from memory.mnemo_config import is_mnemo_enabled
@@ -129,7 +132,7 @@ def build_preferences_from_neo4j(user_id: str) -> Dict[str, Any]:
     if not kg or not kg.enabled:
         return {}
 
-    facts = kg.get_facts_for_user(user_id)
+    facts = kg.get_facts_for_user(user_id, space_id=space_id, space_ids=space_ids)
     evidence = kg.get_evidence_count_for_user(user_id)
 
     result = _default_hub_shape()

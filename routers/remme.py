@@ -3,7 +3,7 @@ import asyncio
 import json
 from pathlib import Path
 from datetime import datetime
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel
 import requests
 import pdb
@@ -630,14 +630,22 @@ async def update_fact(request: UpdateFactRequest):
 
 
 @router.get("/preferences")
-async def get_user_preferences():
-    """Get all UserModel preferences for frontend display. When MNEMO_ENABLED, reads from Neo4j via adapter; else from JSON hubs."""
+async def get_user_preferences(
+    space_id: str | None = Query(None, description="Filter preferences to global + this space"),
+    space_ids: str | None = Query(None, description="Comma-separated space IDs to include (alternative to space_id)"),
+):
+    """Get all UserModel preferences for frontend display. When MNEMO_ENABLED, reads from Neo4j via adapter; else from JSON hubs. Phase 3B: optional space_id/space_ids filter."""
     try:
         from memory.mnemo_config import is_mnemo_enabled
         if is_mnemo_enabled():
             from memory.neo4j_preferences_adapter import build_preferences_from_neo4j
             from memory.user_id import get_user_id
-            result = build_preferences_from_neo4j(get_user_id())
+            space_ids_list = [s.strip() for s in (space_ids or "").split(",") if s.strip()] or None
+            result = build_preferences_from_neo4j(
+                get_user_id(),
+                space_id=space_id,
+                space_ids=space_ids_list,
+            )
             if result:
                 return result
 
