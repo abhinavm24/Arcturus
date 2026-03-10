@@ -168,6 +168,23 @@ class KnowledgeGraph:
             session.run(
                 "CREATE INDEX entity_name_type IF NOT EXISTS FOR (e:Entity) ON (e.name, e.type)"
             )
+            # Ensure IN_SPACE relationship type exists so Neo4j 5+ does not emit
+            # "relationship type does not exist" warnings on every query that references it.
+            try:
+                session.run(
+                    """
+                    MERGE (s:Session {session_id: $sid})
+                    ON CREATE SET s.id = $sid, s.original_query = '', s.created_at = datetime()
+                    WITH s
+                    MERGE (sp:Space {space_id: $sid})
+                    ON CREATE SET sp.name = '', sp.description = '', sp.created_at = datetime()
+                    WITH s, sp
+                    MERGE (s)-[:IN_SPACE]->(sp)
+                    """,
+                    {"sid": "__schema_init__"},
+                )
+            except Exception:
+                pass
 
     def _run_query(self, query: str, parameters: Optional[Dict] = None) -> List[Dict]:
         """Execute a read query and return records as list of dicts."""
@@ -242,13 +259,15 @@ class KnowledgeGraph:
     def get_space_for_session(self, session_id: str) -> Optional[str]:
         """
         Return space_id for session if it has (Session)-[:IN_SPACE]->(Space). Else None.
-        Phase 3C.
+        Phase 3C. Uses OPTIONAL MATCH to avoid Neo4j "relationship type does not exist"
+        warnings when no IN_SPACE relationships exist in the graph yet.
         """
         if not self._enabled or not session_id:
             return None
         records = self._run_query(
             """
-            MATCH (s:Session {session_id: $session_id})-[:IN_SPACE]->(sp:Space)
+            MATCH (s:Session {session_id: $session_id})
+            OPTIONAL MATCH (s)-[:IN_SPACE]->(sp:Space)
             RETURN sp.space_id AS space_id
             LIMIT 1
             """,
@@ -320,7 +339,7 @@ class KnowledgeGraph:
         When None or __global__, memory is global (no IN_SPACE edge). Space must exist (create_space).
         """
         self.get_or_create_user(user_id)
-        self.get_or_create_session(session_id)
+        self.get_or_create_session(session_id, space_id=space_id)
         use_space = space_id and space_id != SPACE_ID_GLOBAL
         self._run_write(
             """

@@ -198,6 +198,15 @@ async def process_run(
                             _space_id = kg.get_space_for_session(run_id)
                     except Exception:
                         pass
+                # Link session to space at run start so the run appears under the space even if no memories are extracted
+                if _space_id is not None:
+                    try:
+                        from memory.knowledge_graph import get_knowledge_graph
+                        _kg = get_knowledge_graph()
+                        if _kg and _kg.enabled:
+                            _kg.get_or_create_session(run_id, space_id=_space_id)
+                    except Exception:
+                        pass
                 memory_context, results = retrieve(
                     query,
                     session_id=run_id,
