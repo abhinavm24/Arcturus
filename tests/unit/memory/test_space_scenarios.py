@@ -71,21 +71,25 @@ class TestMemoryRetrieverSpaceFilter:
     def test_retrieve_with_space_id_builds_filter(self):
         """When space_id passed and not __global__, filter includes global + that space."""
         from unittest.mock import MagicMock, patch
+        import numpy as np
 
         mock_store = MagicMock()
         mock_store.search.return_value = []
+        # Avoid calling Ollama in CI; semantic_recall must reach store.search()
+        fake_embedding = np.zeros(384, dtype=np.float32)
 
         with patch("memory.memory_retriever._get_store", return_value=mock_store):
             with patch("memory.memory_retriever._get_user_id", return_value="user1"):
                 with patch("memory.memory_retriever._get_knowledge_graph", return_value=None):
-                    from memory.memory_retriever import retrieve
+                    with patch("remme.utils.get_embedding", return_value=fake_embedding):
+                        from memory.memory_retriever import retrieve
 
-                    _, _ = retrieve("query", space_id="space-uuid-456")
-                    call_kw = mock_store.search.call_args[1] if mock_store.search.called else {}
-                    meta = call_kw.get("filter_metadata") or {}
-                    assert "space_ids" in meta
-                    assert SPACE_ID_GLOBAL in meta["space_ids"]
-                    assert "space-uuid-456" in meta["space_ids"]
+                        _, _ = retrieve("query", space_id="space-uuid-456")
+        call_kw = mock_store.search.call_args[1] if mock_store.search.called else {}
+        meta = call_kw.get("filter_metadata") or {}
+        assert "space_ids" in meta
+        assert SPACE_ID_GLOBAL in meta["space_ids"]
+        assert "space-uuid-456" in meta["space_ids"]
 
     def test_retrieve_with_space_id_global_no_space_filter(self):
         """When space_id is __global__, no space filter added."""
@@ -124,22 +128,26 @@ class TestMemoryRetrieverSpaceFilter:
     def test_retrieve_with_space_ids_builds_filter(self):
         """When space_ids list passed, filter includes global + requested spaces."""
         from unittest.mock import MagicMock, patch
+        import numpy as np
 
         mock_store = MagicMock()
         mock_store.search.return_value = []
+        # Avoid calling Ollama in CI; semantic_recall must reach store.search()
+        fake_embedding = np.zeros(384, dtype=np.float32)
 
         with patch("memory.memory_retriever._get_store", return_value=mock_store):
             with patch("memory.memory_retriever._get_user_id", return_value="user1"):
                 with patch("memory.memory_retriever._get_knowledge_graph", return_value=None):
-                    from memory.memory_retriever import retrieve
+                    with patch("remme.utils.get_embedding", return_value=fake_embedding):
+                        from memory.memory_retriever import retrieve
 
-                    _, _ = retrieve("query", space_ids=["space-a", "space-b"])
-                    call_kw = mock_store.search.call_args[1] if mock_store.search.called else {}
-                    meta = call_kw.get("filter_metadata") or {}
-                    assert "space_ids" in meta
-                    assert SPACE_ID_GLOBAL in meta["space_ids"]
-                    assert "space-a" in meta["space_ids"]
-                    assert "space-b" in meta["space_ids"]
+                        _, _ = retrieve("query", space_ids=["space-a", "space-b"])
+        call_kw = mock_store.search.call_args[1] if mock_store.search.called else {}
+        meta = call_kw.get("filter_metadata") or {}
+        assert "space_ids" in meta
+        assert SPACE_ID_GLOBAL in meta["space_ids"]
+        assert "space-a" in meta["space_ids"]
+        assert "space-b" in meta["space_ids"]
 
 
 class TestPreferencesAdapterSpaceParams:
