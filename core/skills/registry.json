@@ -260,6 +260,14 @@
     "type": "python",
     "version": "1.0.0"
   },
+  "unified_extraction": {
+    "class_name": "UnifiedExtractionSkill",
+    "description": "Extracts memories, entities, relationships, facts, and evidence from conversation or memory text (Mnemo unified path)",
+    "intent_triggers": [],
+    "path": "core/skills/library/unified_extraction",
+    "type": "python",
+    "version": "1.0.0"
+  },
   "web_clipper": {
     "class_name": "WebClipperSkill",
     "description": "Downloads and archives web pages to Notes",

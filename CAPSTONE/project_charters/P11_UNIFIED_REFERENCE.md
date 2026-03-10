@@ -351,7 +351,21 @@ Use this section as the single list of what to do next; update as you complete i
 
 5. **Other** — Expansion depth (multi-hop), Spaces retrieval scoping, graph explorer, spaces manager — per delivery README.
 
-### 8.8 Key design principles (from design doc, for future reference)
+### 8.8 Future Phase (post–Phase 5) — Spaces and beyond
+
+Items deferred from Phase 4 Spaces UI; to consider in future phases:
+
+1. **Per-space model choice and custom instructions** — Like Perplexity: allow users to override the default model and set custom system instructions per Space, so the assistant behaves differently inside each Space.
+
+2. **Collaboration and sharing** — Invite others to a Space as viewers or “research partners”; permissions (read, add threads, ask follow-ups); for teams/Enterprise: admin control of org-wide Spaces and visibility.
+
+3. **File upload into a Space** — RAG documents scoped to Space; files attached to a Space become searchable context for runs in that Space (e.g. policies, PDFs, class notes). Requires RAG backend support for `space_id`.
+
+4. **Storage limits per Space** — Per-space quotas (e.g. max files, max memories); higher limits for Pro/Enterprise plans.
+
+5. **Space delete** — Backend support for deleting a Space (cascade or soft-delete of associated memories/sessions) if not yet implemented.
+
+### 8.9 Key design principles (from design doc, for future reference)
 
 1. **Neo4j = structured truth** — Entities, relationships, Facts, Evidence.
 2. **Qdrant = semantic recall** — Memory text, vector search. Not source of truth for profile.
