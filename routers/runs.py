@@ -301,6 +301,7 @@ async def process_run(
                     extraction = await asyncio.to_thread(
                         unified.extract_from_session, query, history, existing_memories=results
                     )
+                    print(f" Remme: Extracted MEM from run {run_id}---->{extraction}")
                     commands = [{"action": m.action, "text": m.text, "id": m.id} for m in extraction.memories]
                     preferences = None  # do not write to hubs; step 3 ingests facts to Neo4j
                 else:

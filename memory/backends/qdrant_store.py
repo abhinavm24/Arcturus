@@ -134,6 +134,7 @@ class QdrantVectorStore:
                 from shared.state import get_unified_extractor
                 unified = get_unified_extractor()
                 extraction = unified.extract_from_memory_text(text)
+                print(f"[QdrantVectorStore] Extracted entities {extraction} from the text {text}") 
                 legacy = extraction.to_legacy_entity_result()
                 entities = legacy.get("entities")
                 entity_relationships = legacy.get("entity_relationships")
