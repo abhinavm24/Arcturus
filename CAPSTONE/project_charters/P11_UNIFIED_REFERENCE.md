@@ -429,6 +429,8 @@ Items deferred from Phase 3 Spaces; to consider in future phases:
 
 5. **Space delete** — Backend support for deleting a Space (cascade or soft-delete of associated memories/sessions) if not yet implemented.
 
+6. **Unified memory architecture: Notes, Episodic, RAG** — Migrate Notes, Episodic memory (session summaries), and RAG documents to the same Mnemo architecture: space-scoped, Sync Engine–backed, offline-first. Add `space_id` to each entity; add entity types to the sync protocol (note, episodic_session, rag_document); use same LWW + per-space sync policy. The current architecture and Sync Engine design (§8.5, P11_PHASE4_SYNC_ENGINE_DESIGN.md) support this extension—sync protocol is entity-type agnostic. Notes: same pattern as Memories. Episodic: sessions already have space via Session–IN_SPACE→Space. RAG: decide sync granularity (per-document vs per-chunk); same policy/merge logic applies.
+
 ### 8.10 Key design principles (from design doc, for future reference)
 
 1. **Neo4j = structured truth** — Entities, relationships, Facts, Evidence.
