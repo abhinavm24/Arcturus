@@ -245,7 +245,8 @@ So we **don’t** require a generic CRDT library (e.g. Automerge) for Phase 4; *
 7. **Sync engine** — Orchestrate push then pull on interval or on connectivity.  
 8. **Backend sync API** — `POST /sync/push`, `POST /sync/pull` with cloud store.  
 9. **Integration** — After add_memory/create_space, enqueue for sync; on startup/network-up trigger sync.  
-10. **Tests** — Unit tests for merge and policy; integration test: two “devices” push/pull and converge.
+10. **Tests** — Unit tests for merge and policy; integration test: two “devices” push/pull and converge; load testing for sync (many devices, burst changes).
+11. **Deliverable** — Provide `memory/sync.py` as entry point (re-export from `memory/sync/`) to match charter deliverable.
 
 ---
 
@@ -267,3 +268,27 @@ So we **don’t** require a generic CRDT library (e.g. Automerge) for Phase 4; *
 - Selective sync: Per-space `sync_policy`; filter push/pull by policy.
 
 This design keeps industry best practices (offline-first, CRDT-style convergence, selective sync) while fitting the existing Mnemo stack (Qdrant, Neo4j, Spaces) and avoiding unnecessary complexity (no full CRDT library for v1).
+
+---
+
+## 13. Charter alignment and gaps (P11_mnemo_real_time_memory_knowledge_graph)
+
+### 13.1 Covered
+
+- **CRDT-based sync** (11.4): LWW + OR-Set; conflict-free merge.
+- **Offline-first** (11.4): Local store as source of truth; sync when connected.
+- **Selective sync** (11.4): Per-space `sync_policy` (sync vs local_only).
+- **Deliverable** (11.6): `memory/sync.py` — provide as entry point (re-export from `memory/sync/`).
+
+### 13.2 Targets to adopt
+
+- **Real-time sync application:** Align with charter 11.1 "New memories indexed within 100ms of creation." When applying pulled changes to local Qdrant/Neo4j, target apply latency (e.g. ≤100ms for typical batch) so synced memories are searchable promptly.
+- **Load testing:** Charter Day 16–20 calls for "Sync/lifecycle policies and load testing." Include sync load tests: multiple devices, burst changes, reconnection scenarios.
+
+### 13.3 Deferred (post–Phase 5)
+
+These items come from the charter but are out of scope for Phase 4 v1; see P11_UNIFIED_REFERENCE.md §8.9:
+
+- **Shared spaces / multi-user collaboration** (11.3): Team members contributing to shared spaces. Phase 4 is single-user multi-device only.
+- **Sharding / cross-user federated search** (11.1): Per-user shards with cross-user federated search for shared spaces. Depends on shared spaces.
+- **Peer-to-peer sync, full CRDT text editing, RAG sync** — per §11 Out of scope for v1.

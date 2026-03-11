@@ -431,6 +431,14 @@ Items deferred from Phase 3 Spaces; to consider in future phases:
 
 6. **Unified memory architecture: Notes, Episodic, RAG** — Migrate Notes, Episodic memory (session summaries), and RAG documents to the same Mnemo architecture: space-scoped, Sync Engine–backed, offline-first. Add `space_id` to each entity; add entity types to the sync protocol (note, episodic_session, rag_document); use same LWW + per-space sync policy. The current architecture and Sync Engine design (§8.5, P11_PHASE4_SYNC_ENGINE_DESIGN.md) support this extension—sync protocol is entity-type agnostic. Notes: same pattern as Memories. Episodic: sessions already have space via Session–IN_SPACE→Space. RAG: decide sync granularity (per-document vs per-chunk); same policy/merge logic applies.
 
+7. **Shared spaces / multi-user collaboration** (charter 11.3) — Team members can contribute to and query shared knowledge spaces. Phase 4 Sync Engine is single-user multi-device only. Post–Phase 5: add permissions (viewer, contributor), invite flow, and cross-user sync for shared spaces.
+
+8. **Sharding / cross-user federated search** (charter 11.1) — Per-user shards with cross-user federated search for shared spaces. Depends on shared spaces (item 7). Post–Phase 5: sharding strategy when multi-user shared spaces are implemented.
+
+9. **Phase 4 Sync Engine — load testing and latency** — Sync load testing (multiple devices, burst changes, reconnection scenarios) and real-time sync application target (e.g. ≤100ms apply latency for pulled changes). See P11_PHASE4_SYNC_ENGINE_DESIGN.md §13.
+
+10. **Phase 4 Sync Engine — extended scope** — Peer-to-peer sync (no server), full CRDT for in-place text editing (RGA/Automerge), RAG sync, real-time WebSocket push. See design doc §11 Out of scope for v1.
+
 ### 8.10 Key design principles (from design doc, for future reference)
 
 1. **Neo4j = structured truth** — Entities, relationships, Facts, Evidence.
