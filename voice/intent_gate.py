@@ -554,7 +554,7 @@ class IntentRouter:
         spoken = f"Opening {tab}."
         with self._orch._lock:
             self._orch._set_state("SPEAKING")
-        self._orch.tts.speak(spoken)
+        self._orch._speak(spoken, source="navigation")
         with self._orch._lock:
             if self._orch.state == "SPEAKING":
                 pass  # will enter follow-up below

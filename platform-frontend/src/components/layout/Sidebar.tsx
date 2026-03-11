@@ -160,14 +160,13 @@ export const Sidebar: React.FC<{ hideSubPanel?: boolean }> = ({ hideSubPanel }) 
         <div className="h-full flex overflow-hidden">
             {/* NavRail - Left Vertical Bar */}
             <div className="w-16 border-r border-white/10 bg-background/10 backdrop-blur-md flex flex-col items-center py-4 gap-2 shrink-0 z-20">
-                {/* Top Tools */}
-                <div className="flex-1 w-full px-2 space-y-2">
+                {/* Top Tools — scrollable so Echo + Settings always stay pinned at bottom */}
+                <div className="flex-1 w-full px-2 space-y-2 overflow-y-auto min-h-0 no-scrollbar">
                     <NavIcon icon={PlayCircle} label="Runs" tab="runs" active={sidebarTab === 'runs'} onClick={() => setSidebarTab('runs')} />
                     <NavIcon icon={Database} label="RAG" tab="rag" active={sidebarTab === 'rag'} onClick={() => setSidebarTab('rag')} />
                     <NavIcon icon={Notebook} label="Notes" tab="notes" active={sidebarTab === 'notes'} onClick={() => setSidebarTab('notes')} />
                     <NavIcon icon={Box} label="MCP" tab="mcp" active={sidebarTab === 'mcp'} onClick={() => setSidebarTab('mcp')} />
                     <NavIcon icon={Brain} label="RemMe" tab="remme" active={sidebarTab === 'remme'} onClick={() => setSidebarTab('remme')} />
-                    <NavIcon icon={Mic} label="Echo" tab="echo" active={sidebarTab === 'echo'} onClick={() => setSidebarTab('echo')} />
                     <NavIcon icon={Code2} label="Explorer" tab="explorer" active={sidebarTab === 'explorer'} onClick={() => setSidebarTab('explorer')} />
                     <NavIcon icon={LayoutGrid} label="Canvas" tab="canvas" active={sidebarTab === 'canvas'} onClick={() => setSidebarTab('canvas')} />
 
@@ -184,7 +183,8 @@ export const Sidebar: React.FC<{ hideSubPanel?: boolean }> = ({ hideSubPanel }) 
                 </div>
 
                 {/* Bottom Tools */}
-                <div className="w-full px-2">
+                <div className="w-full px-2 space-y-2">
+                    <NavIcon icon={Mic} label="Echo" tab="echo" active={sidebarTab === 'echo'} onClick={() => setSidebarTab('echo')} />
                     <NavIcon icon={Settings} label="Settings" tab="settings" active={sidebarTab === 'settings'} onClick={() => setSidebarTab('settings')} />
                 </div>
             </div>

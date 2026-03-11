@@ -121,13 +121,37 @@ class Orchestrator:
             print(f"[Orchestrator._publish] Error publishing {event_type!r}: {exc}")
 
     # ─────────────── State transitions ───────────────
-    def _set_state(self, new_state: str) -> None:
-        """Set state and log transition (state transitions only)."""
+    def _set_state(self, new_state: str, silent: bool = False) -> None:
+        """Set state and log transition.
+
+        Args:
+            new_state: Target state string.
+            silent:    When True, update the internal state without
+                       broadcasting a ``voice_state`` SSE event.  Use this
+                       for transient bookkeeping states (e.g. echo-suppression
+                       SPEAKING during a nexus ack) that must NOT flash on the
+                       frontend UI.
+        """
         prev = self.state
         if prev != new_state:
-            print(f"[VoiceState] {prev} → {new_state}")
+            print(f"[VoiceState] {prev} → {new_state}{' (silent)' if silent else ''}")
             self.state = new_state
-            self._publish("voice_state", {"state": new_state})
+            if not silent:
+                self._publish("voice_state", {"state": new_state})
+
+    # ─────────────── TTS speak wrapper ─────────────────────────────────────
+    def _speak(self, text: str, source: str = "agent") -> None:
+        """
+        Speak via TTS **and** broadcast a ``voice_tts`` SSE event so the
+        Echo panel can display what Arcturus said.
+
+        Args:
+            text:   The plain-text string to speak.
+            source: Label for the UI (e.g. ``"answer"``, ``"clarification"``,
+                    ``"navigation"``, ``"dictation"``).
+        """
+        self._publish("voice_tts", {"text": text, "source": source})
+        self.tts.speak(text)
 
     def _set_active_run(self, run_id: str | None) -> None:
         with self._lock:
@@ -293,7 +317,7 @@ class Orchestrator:
         # Cancel any TTS and ongoing Nexus run
         self.tts.cancel()
         self._stop_active_run_async()
-        self.tts.speak("Dictation mode on. Speak freely, I\'m listening.")
+        self._speak("Dictation mode on. Speak freely, I'm listening.", source="dictation")
 
         return session_id
 
@@ -320,7 +344,7 @@ class Orchestrator:
         doc = session.get_document()
 
         print(f"⏹️ [Orchestrator] Dictation STOPPED — {session.word_count} words.")
-        self.tts.speak(f"Dictation stopped. {session.word_count} words saved.")
+        self._speak(f"Dictation stopped. {session.word_count} words saved.", source="dictation")
 
         return {
             "session_id": session.session_id,
@@ -468,7 +492,7 @@ class Orchestrator:
         # ── Speak the question ─────────────────────────────────────────────
         with self._lock:
             self._set_state("SPEAKING")
-        self.tts.speak(spoken_q)
+        self._speak(spoken_q, source="clarification")
         with self._lock:
             if self.state != "SPEAKING":
                 # Barge-in during the question — abort
@@ -532,7 +556,7 @@ class Orchestrator:
             print("⏰ [Orchestrator] No clarification answer received within timeout.")
             # Speak a timeout notice and return to THINKING so the run can
             # be cancelled or the user can try again.
-            self.tts.speak("I didn't catch your answer. Please try again.")
+            self._speak("I didn't catch your answer. Please try again.", source="clarification")
             with self._lock:
                 self._set_state("THINKING")
             return False
@@ -594,6 +618,20 @@ class Orchestrator:
         history_prefix = self.session_logger.get_history_prompt(max_turns=8)
         enriched_query = f"{history_prefix}{query}" if history_prefix else query
 
+        # Speak brief acknowledgment BEFORE starting the Nexus run so it appears
+        # above the user query in the conversation UI.
+        ack = random.choice(self._ACK_PHRASES)
+        with self._lock:
+            self._set_state("SPEAKING", silent=True)
+        self._speak(ack, source="agent")
+        with self._lock:
+            if self.state == "SPEAKING":
+                self._set_state("THINKING")
+            else:
+                # Genuine barge-in happened during ack
+                print("⚡ [Orchestrator] Barge-in during ack — aborting.")
+                return
+
         run_id = self._start_nexus_run(enriched_query)
         if not run_id:
             print("❌ [Orchestrator] Failed to start Nexus run.")
@@ -617,21 +655,8 @@ class Orchestrator:
         evt = register_run_waiter(run_id)
         print(f"📡 [Orchestrator] Event registered for run {run_id}.")
 
-        # Speak brief acknowledgment while agent works
-        # Set state to SPEAKING so VAD echo suppression kicks in
-        ack = random.choice(self._ACK_PHRASES)
-        with self._lock:
-            self._set_state("SPEAKING")
-        self.tts.speak(ack)
-        with self._lock:
-            if self.state == "SPEAKING":
-                self._set_state("THINKING")
-            else:
-                # Genuine barge-in happened during ack
-                pop_run_result(run_id)
-                print("⚡ [Orchestrator] Barge-in during ack — aborting.")
-                self._stop_active_run_async()
-                return
+        # Publish nexus-run-started event so the UI can display it
+        self._publish("voice_nexus_run", {"active": True, "run_id": run_id, "query": query})
 
         print(f"⏳ [Orchestrator] Waiting for Nexus run {run_id}...")
 
@@ -681,7 +706,8 @@ class Orchestrator:
                 ping = next(_ping_cycle)
                 print(f"📣 [Orchestrator] Progress ping: {ping}")
                 with self._lock:
-                    self._set_state("SPEAKING")
+                    # silent=True: keep UI showing THINKING while we say the ping
+                    self._set_state("SPEAKING", silent=True)
                 self.tts.speak(ping)
                 with self._lock:
                     if self.state == "SPEAKING":
@@ -706,6 +732,7 @@ class Orchestrator:
         if not evt.is_set():
             pop_run_result(run_id)
             print(f"⏰ [Orchestrator] Run {run_id} timed out after {RUN_TIMEOUT_SEC}s")
+            self._publish("voice_nexus_run", {"active": False, "run_id": run_id, "reason": "timeout"})
             self.session_logger.log_turn(
                 user_transcript=query,
                 tts_text=None,
@@ -739,7 +766,7 @@ class Orchestrator:
                   f"\"{spoken_text[:100]}...\"")
             with self._lock:
                 self._set_state("SPEAKING")
-            self.tts.speak(spoken_text)
+            self._speak(spoken_text, source="answer")
         else:
             print("⚠️ [Orchestrator] No speakable output from Nexus.")
 
@@ -752,6 +779,9 @@ class Orchestrator:
             latency_ms=latency_ms,
             source="nexus",
         )
+
+        # Nexus run is complete — notify UI
+        self._publish("voice_nexus_run", {"active": False, "run_id": run_id, "reason": "completed"})
 
         # Enter follow-up listening window (only if not barged-in)
         with self._lock:
@@ -981,6 +1011,18 @@ class Orchestrator:
         history_prefix = self.session_logger.get_history_prompt(max_turns=8)
         enriched_query = f"{history_prefix}{query}" if history_prefix else query
 
+        # Speak acknowledgment BEFORE starting the Nexus run
+        ack = random.choice(self._ACK_PHRASES)
+        with self._lock:
+            self._set_state("SPEAKING", silent=True)
+        self._speak(ack, source="agent")
+        with self._lock:
+            if self.state == "SPEAKING":
+                self._set_state("THINKING")
+            else:
+                print("⚡ [Orchestrator] Barge-in during ack — aborting streamed path acknowledgment.")
+                return
+
         run_id = self._start_nexus_run(enriched_query)
         if not run_id:
             print("❌ [Orchestrator] Failed to start Nexus run.")
@@ -1004,22 +1046,6 @@ class Orchestrator:
         stream_q = register_stream_queue(run_id)
         print(f"📡 [Orchestrator] Event + Stream Queue registered for run {run_id}")
 
-        # Speak acknowledgment
-        ack = random.choice(self._ACK_PHRASES)
-        with self._lock:
-            self._set_state("SPEAKING")
-        self.tts.speak(ack)
-        with self._lock:
-            if self.state == "SPEAKING":
-                self._set_state("THINKING")
-            else:
-                pop_run_result(run_id)
-                pop_stream_queue(run_id)
-                print("⚡ [Orchestrator] Barge-in during ack — aborting streamed path.")
-                self._stop_active_run_async()
-                self._set_active_run(None)
-                return
-
         print(f"⏳ [Orchestrator] [STREAMED] Waiting for Nexus run {run_id}...")
 
         # Start the TTS consumer thread — it will block on stream_q
@@ -1034,7 +1060,12 @@ class Orchestrator:
                     self._set_state("SPEAKING")
                 tts_started_event.set()  # Signal that we've entered SPEAKING state
                 print(f"🎙️ [Orchestrator] TTS consumer STARTED — calling speak_streamed()")
-                self.tts.speak_streamed(stream_q)
+                # Pass a callback to publish sentences as they are spoken
+                def _on_sentence(text):
+                    if text and text.strip():
+                        self._publish("voice_tts", {"text": text.strip(), "source": "answer"})
+                
+                self.tts.speak_streamed(stream_q, on_sentence_callback=_on_sentence)
                 print(f"✅ [Orchestrator] TTS consumer FINISHED — speak_streamed() returned")
             except Exception as e:
                 import traceback
