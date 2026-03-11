@@ -1,19 +1,20 @@
 """
 P11 Phase 4 Sync Engine — integration test: two devices push/pull and converge.
 
-Device A: adds a memory (to server store), pushes to sync server.
-Device B: has a separate store, pulls from sync server, applies changes.
-Assert: Device B's store contains the same memory content (convergence).
+- Device A: adds a memory (to server store), pushes to sync server.
+- Device B: has a separate store, pulls from sync server, applies changes.
+- Assert: Device B's store contains the same memory content (convergence).
+- Apply-latency: typical batch apply completes within target (e.g. ≤100ms).
+- Load: multiple devices push, one device pulls and converges; reconnection (pull twice) is idempotent.
 """
 
-import os
-import tempfile
+import time
 from unittest.mock import patch
 
 import numpy as np
 import pytest
 
-from memory.sync.schema import PullRequest, PullResponse, PushRequest, PushResponse
+from memory.sync.schema import PullRequest, PullResponse, PushRequest, PushResponse, SyncChange
 
 
 class _FakeStore:
@@ -233,3 +234,137 @@ class TestSyncTwoDevicesConverge:
             assert text_b in texts_server, f"Expected server store to have B's memory. Got: {texts_server}"
         except Exception as e:
             pytest.skip(f"Could not assert server store: {e}")
+
+    def test_apply_latency_typical_batch_under_100ms(self, client):
+        """Charter 13.2: apply pulled changes in ≤100ms for typical batch (e.g. 5 memories)."""
+        from memory.sync.engine import SyncEngine
+        from memory.user_id import get_user_id
+
+        user_id = get_user_id()
+        store = _FakeStore()
+        engine = SyncEngine(
+            user_id=user_id,
+            device_id="perf-test",
+            store=store,
+            kg=None,
+            get_embedding_fn=lambda t: np.zeros(768, dtype=np.float32),
+        )
+        # Build 5 memory changes (typical batch)
+        changes = []
+        for i in range(5):
+            changes.append(
+                SyncChange(
+                    type="memory",
+                    payload={
+                        "memory_id": f"perf-mem-{i}",
+                        "text": f"Apply latency test memory {i}",
+                        "payload": {"category": "general", "source": "sync", "space_id": "__global__"},
+                        "device_id": "dev-1",
+                    },
+                    version=1,
+                    updated_at="2025-03-10T12:00:00",
+                    deleted=False,
+                )
+            )
+        start = time.perf_counter()
+        engine._apply_changes(changes)
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        # Target ≤100ms; allow 150ms in CI for variance
+        assert elapsed_ms < 150, f"Apply took {elapsed_ms:.1f}ms (target ≤100ms)"
+
+    def test_load_three_devices_push_then_one_pull_converge(self, client):
+        """Load: three devices each push a memory; one device pulls and has all three."""
+        from memory.sync.engine import SyncEngine
+        from memory.user_id import get_user_id
+
+        user_id = get_user_id()
+
+        def push_via_client(base_url: str, req: PushRequest, **kwargs):
+            return self._make_push_via_client(client, req)
+
+        def pull_via_client(base_url: str, req: PullRequest, **kwargs):
+            return self._make_pull_via_client(client, req)
+
+        stores = [_FakeStore(), _FakeStore(), _FakeStore()]
+        texts = ["Load test device A", "Load test device B", "Load test device C"]
+        for i, (store, text) in enumerate(zip(stores, texts)):
+            store.add(text, np.zeros(768, dtype=np.float32), category="general", source="manual")
+            with patch("memory.sync.engine.push_changes", side_effect=push_via_client):
+                with patch("memory.sync.engine.pull_changes", side_effect=pull_via_client):
+                    engine = SyncEngine(
+                        user_id=user_id,
+                        device_id=f"load-dev-{i}",
+                        store=store,
+                        kg=None,
+                        get_embedding_fn=lambda t: np.zeros(768, dtype=np.float32),
+                    )
+                    r = engine.push()
+                    assert r.accepted, r.errors
+
+        # Device D: empty store, pull once
+        store_d = _FakeStore()
+        with patch("memory.sync.engine.push_changes", side_effect=push_via_client):
+            with patch("memory.sync.engine.pull_changes", side_effect=pull_via_client):
+                engine_d = SyncEngine(
+                    user_id=user_id,
+                    device_id="load-dev-d",
+                    store=store_d,
+                    kg=None,
+                    get_embedding_fn=lambda t: np.zeros(768, dtype=np.float32),
+                )
+                engine_d.pull()
+        all_d = store_d.get_all()
+        texts_d = [m.get("text", "") for m in all_d]
+        for expected in texts:
+            assert expected in texts_d, f"Expected {expected} in D after pull. Got: {texts_d}"
+
+    def test_reconnection_second_pull_idempotent(self, client):
+        """Reconnection: pull twice; second pull returns no new changes (or applies idempotently)."""
+        from memory.sync.engine import SyncEngine
+        from memory.user_id import get_user_id
+
+        user_id = get_user_id()
+        # Add one memory and push
+        add_resp = client.post(
+            "/api/remme/add",
+            json={"text": "Reconnection idempotent test memory.", "category": "general"},
+        )
+        assert add_resp.status_code == 200
+
+        def push_via_client(base_url: str, req: PushRequest, **kwargs):
+            return self._make_push_via_client(client, req)
+
+        def pull_via_client(base_url: str, req: PullRequest, **kwargs):
+            return self._make_pull_via_client(client, req)
+
+        try:
+            from shared.state import get_remme_store
+            store_a = get_remme_store()
+        except Exception:
+            pytest.skip("remme store not available")
+        with patch("memory.sync.engine.push_changes", side_effect=push_via_client):
+            with patch("memory.sync.engine.pull_changes", side_effect=pull_via_client):
+                engine = SyncEngine(
+                    user_id=user_id,
+                    device_id="reconnect-dev",
+                    store=store_a,
+                    kg=None,
+                    get_embedding_fn=lambda t: np.zeros(768, dtype=np.float32),
+                )
+                engine.push()
+        store_b = _FakeStore()
+        with patch("memory.sync.engine.push_changes", side_effect=push_via_client):
+            with patch("memory.sync.engine.pull_changes", side_effect=pull_via_client):
+                engine_b = SyncEngine(
+                    user_id=user_id,
+                    device_id="reconnect-dev-b",
+                    store=store_b,
+                    kg=None,
+                    get_embedding_fn=lambda t: np.zeros(768, dtype=np.float32),
+                )
+                pull1 = engine_b.pull()
+                pull2 = engine_b.pull()
+        # Second pull should return no new changes (cursor already advanced)
+        assert len(pull2.changes) == 0, "Reconnection: second pull should return 0 changes"
+        assert len(pull1.changes) >= 1
+        assert len(store_b.get_all()) >= 1

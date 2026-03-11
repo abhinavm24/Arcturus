@@ -12,6 +12,7 @@ import {
     DialogTitle,
     DialogFooter,
 } from '@/components/ui/dialog';
+import { Checkbox } from '@/components/ui/checkbox';
 import { cn } from '@/lib/utils';
 
 /** Phase 4: Spaces management modal — select or create space, Ok applies selection and closes. */
@@ -30,6 +31,7 @@ export const SpacesModal: React.FC<{
     const [isCreateOpen, setIsCreateOpen] = useState(false);
     const [newName, setNewName] = useState('');
     const [newDescription, setNewDescription] = useState('');
+    const [keepOnDeviceOnly, setKeepOnDeviceOnly] = useState(false);
     const [isCreating, setIsCreating] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
@@ -45,10 +47,12 @@ export const SpacesModal: React.FC<{
         setIsCreating(true);
         setError(null);
         try {
-            const space = await createSpace(newName.trim(), newDescription.trim() || undefined);
+            const sync_policy = keepOnDeviceOnly ? 'local_only' : 'sync';
+            const space = await createSpace(newName.trim(), newDescription.trim() || undefined, sync_policy);
             setIsCreateOpen(false);
             setNewName('');
             setNewDescription('');
+            setKeepOnDeviceOnly(false);
             setSelectedId(space.space_id);
         } catch (e: any) {
             setError(e?.message || 'Failed to create space');
@@ -158,6 +162,17 @@ export const SpacesModal: React.FC<{
                                 className="bg-muted border-input text-foreground min-h-[60px] resize-none"
                                 rows={2}
                             />
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <Checkbox
+                                id="modal-space-local-only"
+                                checked={keepOnDeviceOnly}
+                                onCheckedChange={(v) => setKeepOnDeviceOnly(v === true)}
+                                className="border-input"
+                            />
+                            <Label htmlFor="modal-space-local-only" className="text-sm text-muted-foreground cursor-pointer">
+                                Keep on this device only (don&apos;t sync to cloud)
+                            </Label>
                         </div>
                         {error && (
                             <p className="text-sm text-red-500">{error}</p>

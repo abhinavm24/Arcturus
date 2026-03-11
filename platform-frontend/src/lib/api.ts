@@ -58,10 +58,12 @@ export const api = {
         }
     },
 
-    createSpace: async (name: string, description?: string): Promise<Space> => {
+    createSpace: async (name: string, description?: string, sync_policy?: 'sync' | 'local_only'): Promise<Space> => {
+        const payload: { name: string; description?: string; sync_policy?: string } = { name, description: description ?? '' };
+        if (sync_policy) payload.sync_policy = sync_policy;
         const res = await axios.post<{ status: string; space_id: string; name: string; description: string }>(
             `${API_BASE}/remme/spaces`,
-            { name, description: description ?? '' }
+            payload
         );
         return { space_id: res.data.space_id, name: res.data.name, description: res.data.description };
     },

@@ -244,7 +244,7 @@ interface SpacesSlice {
     spaces: Space[];
     currentSpaceId: string | null;
     fetchSpaces: () => Promise<void>;
-    createSpace: (name: string, description?: string) => Promise<Space>;
+    createSpace: (name: string, description?: string, sync_policy?: 'sync' | 'local_only') => Promise<Space>;
     setCurrentSpaceId: (spaceId: string | null) => void;
     isSpacesModalOpen: boolean;
     setIsSpacesModalOpen: (open: boolean) => void;
@@ -1533,8 +1533,8 @@ export const useAppStore = create<AppState>()(
                     console.error("Failed to fetch spaces", e);
                 }
             },
-            createSpace: async (name, description) => {
-                const space = await api.createSpace(name, description);
+            createSpace: async (name, description, sync_policy) => {
+                const space = await api.createSpace(name, description, sync_policy);
                 set((s) => ({ spaces: [space, ...s.spaces] }));
                 return space;
             },
