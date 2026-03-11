@@ -7,6 +7,21 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import { formatDistanceToNow } from 'date-fns';
+
+/** Safe timestamp for sort (invalid/missing → 0 so they sort to end). */
+function getSortTime(created_at: string | undefined | null): number {
+    if (created_at == null || created_at === '') return 0;
+    const t = new Date(created_at).getTime();
+    return Number.isFinite(t) ? t : 0;
+}
+
+/** Safe relative date for display; returns "—" when invalid or missing. */
+function formatMemoryDate(created_at: string | undefined | null): string {
+    if (created_at == null || created_at === '') return '—';
+    const d = new Date(created_at);
+    if (!Number.isFinite(d.getTime())) return '—';
+    return `${formatDistanceToNow(d)} ago`;
+}
 import axios from 'axios';
 import { API_BASE } from '@/lib/api';
 
@@ -93,7 +108,7 @@ const SnippetsView: React.FC = () => {
                 m.category.toLowerCase().includes(searchQuery.toLowerCase())
             );
         }
-        return items.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+        return items.sort((a, b) => getSortTime(b.created_at) - getSortTime(a.created_at));
     }, [memories, searchQuery]);
 
     const danglingCount = useMemo(() => memories.filter(m => m.source_exists === false).length, [memories]);
@@ -276,7 +291,7 @@ const SnippetsView: React.FC = () => {
                                             {memory.category}
                                         </div>
                                         <span className="text-[9px] text-muted-foreground/50 font-mono">
-                                            {formatDistanceToNow(new Date(memory.created_at))} ago
+                                            {formatMemoryDate(memory.created_at)}
                                         </span>
                                     </div>
                                 </div>
