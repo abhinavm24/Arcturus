@@ -94,8 +94,6 @@ packages = [
     "storage",
 ]
 
-[tool.uv]
-required-environments = ["sys_platform == 'win32' and platform_machine == 'AMD64'"]
 
 [dependency-groups]
 dev = [
