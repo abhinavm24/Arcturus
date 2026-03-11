@@ -696,7 +696,7 @@ class AgentLoop4:
                                 {"step_id": step_id, "agent": step_data.get("agent", ""), "error": str(result)},
                                 session_id=_sid,
                             )
-                            create_checkpoint(_sid, "step_failed", context.plan_graph, last_sequence=_chronicle._sequence)
+                            create_checkpoint(_sid, "step_failed", context.plan_graph, last_sequence=_chronicle.get_last_sequence(_sid))
                         except Exception:
                             pass
                 elif result["success"]:
@@ -724,7 +724,7 @@ class AgentLoop4:
                             },
                             session_id=_sid,
                         )
-                        create_checkpoint(_sid, "step_complete", context.plan_graph, last_sequence=_chronicle._sequence)
+                        create_checkpoint(_sid, "step_complete", context.plan_graph, last_sequence=_chronicle.get_last_sequence(_sid))
                     except Exception:
                         pass
 
@@ -763,7 +763,7 @@ class AgentLoop4:
                                 {"step_id": step_id, "agent": step_data.get("agent", ""), "error": result.get("error", "")},
                                 session_id=_sid,
                             )
-                            create_checkpoint(_sid, "step_failed", context.plan_graph, last_sequence=_chronicle._sequence)
+                            create_checkpoint(_sid, "step_failed", context.plan_graph, last_sequence=_chronicle.get_last_sequence(_sid))
                         except Exception:
                             pass
 
