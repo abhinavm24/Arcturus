@@ -64,7 +64,7 @@
 - **Run scoping**: `RunRequest.space_id`; `process_run` passes `space_id` to retrieval and ingestion
 - **Memories inherit space** from session when provided
 
-**Phase 3 — Space UI (delivered)**
+**Phase 3.5 — Space UI (delivered)**
 - **SpacesPanel**, **SpacesModal** (platform-frontend): Create/list/select spaces; space selector in New Run and Add Memory
 - **API**: `createSpace(name, description?, sync_policy?)`; `space_id` passed to `createRun`, `addMemory`, `getMemories`
 - **Store**: SpacesSlice, `currentSpaceId` persisted; runs and memories filtered by selected space
