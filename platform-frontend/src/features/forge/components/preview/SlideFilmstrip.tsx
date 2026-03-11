@@ -62,7 +62,6 @@ export function SlideFilmstrip({ slides, theme, currentIndex, onSelect, imageBas
                   theme={theme}
                   slideIndex={i}
                   totalSlides={slides.length}
-                  isThumb
                   imageBaseUrl={imageBaseUrl}
                   availableImageIds={availableImageIds}
                 />
