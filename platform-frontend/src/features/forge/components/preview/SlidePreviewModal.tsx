@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogClose, DialogContent, DialogTitle } from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { X } from 'lucide-react';
 import { useAppStore } from '@/store';
 import { api, API_BASE } from '@/lib/api';
 import { SlideFilmstrip } from './SlideFilmstrip';
@@ -138,6 +140,17 @@ function SlidePreviewContent() {
         <span className="text-sm text-muted-foreground ml-3 truncate max-w-[400px]">
           — {activeArtifact.title}
         </span>
+        <div className="ml-auto flex items-center gap-2">
+          <DialogClose asChild>
+            <Button variant="ghost" size="sm" className="gap-1.5 text-foreground hover:text-foreground hover:bg-muted/40">
+              <X className="w-3.5 h-3.5" />
+              Close Preview
+              <kbd className="ml-1 pointer-events-none hidden h-5 select-none items-center rounded border border-border/40 bg-muted/50 px-1.5 font-mono text-[10px] font-medium text-muted-foreground sm:inline-flex">
+                Esc
+              </kbd>
+            </Button>
+          </DialogClose>
+        </div>
       </div>
 
       {/* 3-Panel Layout */}
@@ -210,7 +223,8 @@ export function SlidePreviewModal({ open, onClose }: { open: boolean; onClose: (
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
-        className="fixed inset-4 max-w-none translate-x-0 translate-y-0 left-0 top-0 flex flex-col bg-charcoal-900 rounded-xl border-border/30 overflow-hidden p-0 animate-modal-scale-in [&>button:last-child]:top-3 [&>button:last-child]:right-3 [&>button:last-child]:text-muted-foreground [&>button:last-child]:z-10"
+        hideCloseButton
+        className="fixed inset-4 max-w-none translate-x-0 translate-y-0 left-0 top-0 flex flex-col bg-charcoal-900 rounded-xl border-border/30 overflow-hidden p-0 animate-modal-scale-in"
       >
         <SlidePreviewContent key={openCount} />
       </DialogContent>
