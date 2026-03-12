@@ -226,25 +226,9 @@ class ForgeOrchestrator:
 
         content_tree = content_tree_model.model_dump(mode="json")
 
-        # Create revision
+        # Create revision and update artifact
         change_summary = compute_change_summary(artifact.content_tree, content_tree)
-        revision = self.revision_manager.create_revision(
-            artifact_id=artifact_id,
-            content_tree=content_tree,
-            change_summary=change_summary,
-            parent_revision_id=artifact.revision_head_id,
-        )
-
-        # Update artifact
-        artifact.content_tree = content_tree
-        artifact.revision_head_id = revision.id
-        artifact.updated_at = datetime.now(timezone.utc)
-        self.storage.save_artifact(artifact)
-
-        # Auto-generate images in the background for slides with image elements
-        if artifact.type == ArtifactType.slides:
-            version = self._image_gen_version[artifact_id] = self._image_gen_version.get(artifact_id, 0) + 1
-            asyncio.create_task(self._generate_and_cache_images(artifact_id, content_tree, version))
+        self._commit_revision_update(artifact, content_tree, change_summary)
 
         return artifact.model_dump(mode="json")
 
@@ -735,22 +719,50 @@ class ForgeOrchestrator:
 
         content_tree = content_tree_model.model_dump(mode="json")
 
-        # Create revision
-        change_summary = f"Added upload analysis from {filename}"
-        revision = self.revision_manager.create_revision(
-            artifact_id=artifact_id,
-            content_tree=content_tree,
-            change_summary=change_summary,
-            parent_revision_id=artifact.revision_head_id,
+        # Create revision and update artifact
+        self._commit_revision_update(
+            artifact, content_tree, f"Added upload analysis from {filename}"
         )
 
-        # Update artifact
-        artifact.content_tree = content_tree
+        return artifact.model_dump(mode="json")
+
+    def _commit_revision_update(
+        self,
+        artifact: "Artifact",
+        new_tree: Dict[str, Any],
+        change_summary: str,
+        *,
+        edit_instruction: Optional[str] = None,
+        patch: Optional[Dict[str, Any]] = None,
+        diff: Optional[Dict[str, Any]] = None,
+        restored_from_revision_id: Optional[str] = None,
+    ) -> "Revision":
+        """Create a revision, update the artifact, and trigger image regeneration for slides."""
+        revision = self.revision_manager.create_revision(
+            artifact_id=artifact.id,
+            content_tree=new_tree,
+            change_summary=change_summary,
+            parent_revision_id=artifact.revision_head_id,
+            edit_instruction=edit_instruction,
+            patch=patch,
+            diff=diff,
+            restored_from_revision_id=restored_from_revision_id,
+        )
+
+        artifact.content_tree = new_tree
         artifact.revision_head_id = revision.id
         artifact.updated_at = datetime.now(timezone.utc)
         self.storage.save_artifact(artifact)
 
-        return artifact.model_dump(mode="json")
+        if artifact.type == ArtifactType.slides:
+            images_dir = self.storage.base_dir / artifact.id / "images"
+            if images_dir.exists():
+                import shutil
+                shutil.rmtree(images_dir)
+            version = self._image_gen_version[artifact.id] = self._image_gen_version.get(artifact.id, 0) + 1
+            asyncio.create_task(self._generate_and_cache_images(artifact.id, new_tree, version))
+
+        return revision
 
     async def edit_artifact(
         self,
@@ -842,35 +854,12 @@ class ForgeOrchestrator:
 
         # 8. Persist — create revision with diff/patch/edit_instruction
         change_summary = summarize_diff_highlights(diff.get("highlights", []))
-        revision = self.revision_manager.create_revision(
-            artifact_id=artifact_id,
-            content_tree=new_tree,
-            change_summary=change_summary,
-            parent_revision_id=artifact.revision_head_id,
+        revision = self._commit_revision_update(
+            artifact, new_tree, change_summary,
+            edit_instruction=instruction,
+            patch=patch_dict,
+            diff=diff,
         )
-
-        # Store edit metadata on the revision
-        rev_loaded = self.storage.load_revision(artifact_id, revision.id)
-        if rev_loaded:
-            rev_loaded.edit_instruction = instruction
-            rev_loaded.patch = patch_dict
-            rev_loaded.diff = diff
-            self.storage.save_revision(rev_loaded)
-
-        # Update artifact
-        artifact.content_tree = new_tree
-        artifact.revision_head_id = revision.id
-        artifact.updated_at = datetime.now(timezone.utc)
-        self.storage.save_artifact(artifact)
-
-        # Invalidate cached images and re-generate for slides edits
-        if artifact.type == ArtifactType.slides:
-            images_dir = self.storage.base_dir / artifact_id / "images"
-            if images_dir.exists():
-                import shutil
-                shutil.rmtree(images_dir)
-            version = self._image_gen_version[artifact_id] = self._image_gen_version.get(artifact_id, 0) + 1
-            asyncio.create_task(self._generate_and_cache_images(artifact_id, new_tree, version))
 
         return {
             **artifact.model_dump(mode="json"),
@@ -881,6 +870,74 @@ class ForgeOrchestrator:
                 "diff": diff,
                 "warnings": warnings,
                 "change_summary": change_summary,
+            },
+        }
+
+    async def restore_revision(
+        self,
+        artifact_id: str,
+        target_revision_id: str,
+        base_revision_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Restore an artifact to a previous revision's content tree.
+
+        Creates a new revision (never rewrites history) with the snapshot
+        from the target revision. Returns artifact-shaped payload consistent
+        with edit_artifact responses.
+
+        Raises:
+            ValueError: On invalid artifact or missing revision
+            ConflictError: When base_revision_id doesn't match current head
+        """
+        from core.studio.editing.diff import compute_revision_diff
+
+        # 1. Load artifact
+        artifact = self.storage.load_artifact(artifact_id)
+        if artifact is None:
+            raise ValueError(f"Artifact not found: {artifact_id}")
+        if artifact.content_tree is None:
+            raise ValueError(f"Artifact {artifact_id} has no content tree")
+
+        # 2. Optimistic concurrency check
+        if base_revision_id is not None and artifact.revision_head_id != base_revision_id:
+            raise ConflictError(
+                f"Conflict: expected revision {base_revision_id}, "
+                f"but current is {artifact.revision_head_id}"
+            )
+
+        # 3. Already-current early return
+        if target_revision_id == artifact.revision_head_id:
+            return {
+                **artifact.model_dump(mode="json"),
+                "restore_result": {"status": "already_current"},
+            }
+
+        # 4. Load target revision
+        target_revision = self.revision_manager.get_revision(artifact_id, target_revision_id)
+        if target_revision is None:
+            raise ValueError(f"Revision not found: {target_revision_id}")
+
+        # 5. Restore tree and compute diff
+        restored_tree = target_revision.content_tree_snapshot
+        diff = compute_revision_diff(
+            artifact.type.value, artifact.content_tree, restored_tree
+        )
+
+        # 6. Commit via shared helper
+        new_rev = self._commit_revision_update(
+            artifact,
+            restored_tree,
+            f"Restored to: {target_revision.change_summary}",
+            diff=diff,
+            restored_from_revision_id=target_revision_id,
+        )
+
+        return {
+            **artifact.model_dump(mode="json"),
+            "restore_result": {
+                "status": "restored",
+                "revision_id": new_rev.id,
+                "restored_from": target_revision_id,
             },
         }
 
