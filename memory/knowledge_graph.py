@@ -33,7 +33,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from core.utils import log_error, log_step
-from memory.space_constants import SPACE_ID_GLOBAL
+from memory.space_constants import SPACE_ID_GLOBAL, SYNC_POLICY_SYNC
 
 # Optional Neo4j dependency
 try:
@@ -168,6 +168,23 @@ class KnowledgeGraph:
             session.run(
                 "CREATE INDEX entity_name_type IF NOT EXISTS FOR (e:Entity) ON (e.name, e.type)"
             )
+            # Ensure IN_SPACE relationship type exists so Neo4j 5+ does not emit
+            # "relationship type does not exist" warnings on every query that references it.
+            try:
+                session.run(
+                    """
+                    MERGE (s:Session {session_id: $sid})
+                    ON CREATE SET s.id = $sid, s.original_query = '', s.created_at = datetime()
+                    WITH s
+                    MERGE (sp:Space {space_id: $sid})
+                    ON CREATE SET sp.name = '', sp.description = '', sp.created_at = datetime()
+                    WITH s, sp
+                    MERGE (s)-[:IN_SPACE]->(sp)
+                    """,
+                    {"sid": "__schema_init__"},
+                )
+            except Exception:
+                pass
 
     def _run_query(self, query: str, parameters: Optional[Dict] = None) -> List[Dict]:
         """Execute a read query and return records as list of dicts."""
@@ -242,13 +259,15 @@ class KnowledgeGraph:
     def get_space_for_session(self, session_id: str) -> Optional[str]:
         """
         Return space_id for session if it has (Session)-[:IN_SPACE]->(Space). Else None.
-        Phase 3C.
+        Phase 3C. Uses OPTIONAL MATCH to avoid Neo4j "relationship type does not exist"
+        warnings when no IN_SPACE relationships exist in the graph yet.
         """
         if not self._enabled or not session_id:
             return None
         records = self._run_query(
             """
-            MATCH (s:Session {session_id: $session_id})-[:IN_SPACE]->(sp:Space)
+            MATCH (s:Session {session_id: $session_id})
+            OPTIONAL MATCH (s)-[:IN_SPACE]->(sp:Space)
             RETURN sp.space_id AS space_id
             LIMIT 1
             """,
@@ -263,20 +282,34 @@ class KnowledgeGraph:
         user_id: str,
         name: Optional[str] = None,
         description: Optional[str] = None,
+        sync_policy: Optional[str] = None,
     ) -> str:
         """
         Create a Space node for a user. Returns system-generated space_id (UUID).
         Spaces are first-class; must be created explicitly (no implicit creation).
         Creates (User)-[:OWNS_SPACE]->(Space).
+        Phase 4: sync_policy (sync|local_only), version, device_id, updated_at.
         """
         if not self._enabled or not user_id:
             return ""
         space_id = str(uuid.uuid4())
+        policy = (sync_policy or SYNC_POLICY_SYNC).strip() or SYNC_POLICY_SYNC
+        now_ts = datetime.now().isoformat()
+        device_id = ""
+        try:
+            from memory.sync_config import get_device_id
+            device_id = get_device_id()
+        except Exception:
+            pass
         self.get_or_create_user(user_id)
         self._run_write(
             """
             MATCH (u:User {user_id: $user_id})
-            CREATE (sp:Space {space_id: $space_id, name: $name, description: $description, created_at: datetime()})
+            CREATE (sp:Space {
+                space_id: $space_id, name: $name, description: $description,
+                sync_policy: $sync_policy, version: 1, device_id: $device_id,
+                updated_at: $updated_at, created_at: datetime()
+            })
             CREATE (u)-[:OWNS_SPACE]->(sp)
             """,
             {
@@ -284,26 +317,119 @@ class KnowledgeGraph:
                 "space_id": space_id,
                 "name": (name or "").strip() or "",
                 "description": (description or "").strip() or "",
+                "sync_policy": policy,
+                "device_id": device_id,
+                "updated_at": now_ts,
             },
         )
         return space_id
 
     def get_spaces_for_user(self, user_id: str) -> List[Dict[str, Any]]:
-        """List spaces owned by user. Returns [{space_id, name, description}, ...]."""
+        """List spaces owned by user. Returns [{space_id, name, description, sync_policy, version, ...}]."""
         if not self._enabled or not user_id:
             return []
         records = self._run_query(
             """
             MATCH (u:User {user_id: $user_id})-[:OWNS_SPACE]->(sp:Space)
-            RETURN sp.space_id AS space_id, sp.name AS name, sp.description AS description
+            RETURN sp.space_id AS space_id, sp.name AS name, sp.description AS description,
+                   sp.sync_policy AS sync_policy, sp.version AS version,
+                   sp.device_id AS device_id, sp.updated_at AS updated_at
             ORDER BY sp.created_at ASC
             """,
             {"user_id": user_id},
         )
-        return [
-            {"space_id": r["space_id"], "name": r.get("name") or "", "description": r.get("description") or ""}
-            for r in records if r.get("space_id")
-        ]
+        out = []
+        for r in records:
+            if not r.get("space_id"):
+                continue
+            rec = {
+                "space_id": r["space_id"],
+                "name": r.get("name") or "",
+                "description": r.get("description") or "",
+                "sync_policy": r.get("sync_policy") or SYNC_POLICY_SYNC,
+                "version": r.get("version") or 1,
+                "device_id": r.get("device_id") or "",
+                "updated_at": str(r.get("updated_at", "")) if r.get("updated_at") else "",
+            }
+            out.append(rec)
+        return out
+
+    def upsert_space(
+        self,
+        space_id: str,
+        user_id: Optional[str] = None,
+        name: str = "",
+        description: str = "",
+        sync_policy: str = SYNC_POLICY_SYNC,
+        version: int = 1,
+        device_id: str = "",
+        updated_at: str = "",
+    ) -> bool:
+        """
+        Phase 4 Sync: create or update Space node (for applying pulled space changes).
+        If space exists: update name, description, sync_policy, version, device_id, updated_at.
+        If not: create with user_id (required for create).
+        """
+        if not self._enabled or not space_id:
+            return False
+        now_ts = updated_at or datetime.now().isoformat()
+        exists = self._run_query(
+            "MATCH (sp:Space {space_id: $space_id}) RETURN 1 AS x LIMIT 1",
+            {"space_id": space_id},
+        )
+        if exists:
+            self._run_write(
+                """
+                MATCH (sp:Space {space_id: $space_id})
+                SET sp.name = $name, sp.description = $description,
+                    sp.sync_policy = $sync_policy, sp.version = $version,
+                    sp.device_id = $device_id, sp.updated_at = $updated_at
+                """,
+                {
+                    "space_id": space_id,
+                    "name": (name or "").strip(),
+                    "description": (description or "").strip(),
+                    "sync_policy": (sync_policy or SYNC_POLICY_SYNC).strip(),
+                    "version": version,
+                    "device_id": device_id or "",
+                    "updated_at": now_ts,
+                },
+            )
+            return True
+        if user_id:
+            self.get_or_create_user(user_id)
+            self._run_write(
+                """
+                MATCH (u:User {user_id: $user_id})
+                CREATE (sp:Space {
+                    space_id: $space_id, name: $name, description: $description,
+                    sync_policy: $sync_policy, version: $version, device_id: $device_id,
+                    updated_at: $updated_at, created_at: datetime()
+                })
+                CREATE (u)-[:OWNS_SPACE]->(sp)
+                """,
+                {
+                    "user_id": user_id,
+                    "space_id": space_id,
+                    "name": (name or "").strip(),
+                    "description": (description or "").strip(),
+                    "sync_policy": (sync_policy or SYNC_POLICY_SYNC).strip(),
+                    "version": version,
+                    "device_id": device_id or "",
+                    "updated_at": now_ts,
+                },
+            )
+            return True
+        return False
+
+    def delete_space(self, space_id: str) -> None:
+        """Phase 4 Sync: delete Space node (for pulled deleted space). DETACH DELETE."""
+        if not self._enabled or not space_id:
+            return
+        self._run_write(
+            "MATCH (sp:Space {space_id: $space_id}) DETACH DELETE sp",
+            {"space_id": space_id},
+        )
 
     def create_memory(
         self,
@@ -320,7 +446,7 @@ class KnowledgeGraph:
         When None or __global__, memory is global (no IN_SPACE edge). Space must exist (create_space).
         """
         self.get_or_create_user(user_id)
-        self.get_or_create_session(session_id)
+        self.get_or_create_session(session_id, space_id=space_id)
         use_space = space_id and space_id != SPACE_ID_GLOBAL
         self._run_write(
             """
@@ -553,7 +679,7 @@ class KnowledgeGraph:
             "confidence": confidence,
             "source_mode": source_mode or "extraction",
             "now": now,
-            "space_id": space_id if use_space else None,
+            "space_id": space_id if use_space else SPACE_ID_GLOBAL,
         }
         self._run_write(
             """
@@ -647,7 +773,7 @@ class KnowledgeGraph:
         if not valid:
             return False
         use_space = space_id and space_id != SPACE_ID_GLOBAL
-        params: Dict[str, Any] = {"user_id": user_id, "ns": namespace, "key": key, "space_id": space_id if use_space else None}
+        params: Dict[str, Any] = {"user_id": user_id, "ns": namespace, "key": key, "space_id": space_id if use_space else SPACE_ID_GLOBAL}
         records = self._run_query(
             """
             MATCH (u:User {user_id: $user_id})-[:HAS_FACT]->(f:Fact {namespace: $ns, key: $key, space_id: $space_id})
@@ -707,7 +833,7 @@ class KnowledgeGraph:
             "user_id": user_id,
             "namespace": namespace,
             "key": key,
-            "space_id": space_id if use_space else None,
+            "space_id": space_id if use_space else SPACE_ID_GLOBAL,
         }
         self._run_write(
             """
@@ -799,6 +925,7 @@ class KnowledgeGraph:
             namespace=namespace,
             key=key,
             timestamp=now,
+            space_id=space_id,
         )
         fact_dict = {
             "namespace": namespace,
@@ -1367,14 +1494,16 @@ class KnowledgeGraph:
         params: Dict[str, Any] = {"user_id": user_id}
         if space_ids:
             params["space_ids"] = [s for s in space_ids if s and s != SPACE_ID_GLOBAL]
+            params["global_sentinel"] = SPACE_ID_GLOBAL
             if params["space_ids"]:
                 space_filter = """
-                WHERE f.space_id IS NULL OR f.space_id IN $space_ids
+                WHERE (f.space_id IS NULL OR f.space_id = $global_sentinel OR f.space_id IN $space_ids)
                 """
         elif space_id and space_id != SPACE_ID_GLOBAL:
             params["space_ids"] = [space_id]
+            params["global_sentinel"] = SPACE_ID_GLOBAL
             space_filter = """
-            WHERE f.space_id IS NULL OR f.space_id IN $space_ids
+            WHERE (f.space_id IS NULL OR f.space_id = $global_sentinel OR f.space_id IN $space_ids)
             """
         records = self._run_query(
             """

@@ -134,6 +134,7 @@ class QdrantVectorStore:
                 from shared.state import get_unified_extractor
                 unified = get_unified_extractor()
                 extraction = unified.extract_from_memory_text(text)
+                print(f"[QdrantVectorStore] Extracted entities {extraction} from the text {text}") 
                 legacy = extraction.to_legacy_entity_result()
                 entities = legacy.get("entities")
                 entity_relationships = legacy.get("entity_relationships")
@@ -209,13 +210,21 @@ class QdrantVectorStore:
                 return similar[0]
 
         memory_id = str(uuid.uuid4())
+        now_ts = datetime.now().isoformat()
         payload = {
             "text": text,
             "category": category,
             "source": source,
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat(),
+            "created_at": now_ts,
+            "updated_at": now_ts,
+            "version": 1,
+            "deleted": False,
         }
+        try:
+            from memory.sync_config import get_device_id
+            payload["device_id"] = get_device_id()
+        except Exception:
+            payload["device_id"] = ""
         if self._is_tenant and self._user_id:
             payload[self._tenant_keyword_field] = self._user_id
         if session_id:
@@ -407,6 +416,36 @@ class QdrantVectorStore:
         except Exception:
             pass
         return None
+
+    def sync_upsert(
+        self,
+        memory_id: str,
+        text: str,
+        embedding: np.ndarray,
+        payload: Dict[str, Any],
+    ) -> bool:
+        """
+        Phase 4 Sync: upsert memory with explicit id (for applying pulled changes).
+        Skips KG ingest (caller handles separately if needed).
+        """
+        try:
+            vec = embedding.tolist() if isinstance(embedding, np.ndarray) else list(embedding)
+            merged = dict(payload)
+            merged["text"] = text
+            if "version" not in merged:
+                merged["version"] = 1
+            if "updated_at" not in merged:
+                merged["updated_at"] = datetime.now().isoformat()
+            if "deleted" not in merged:
+                merged["deleted"] = False
+            if self._is_tenant and self._user_id and "user_id" not in merged:
+                merged[self._tenant_keyword_field] = self._user_id
+            point = PointStruct(id=memory_id, vector=vec, payload=merged)
+            self.client.upsert(collection_name=self.collection_name, points=[point])
+            return True
+        except Exception as e:
+            log_error(f"Sync upsert failed for {memory_id[:8]}: {e}")
+            return False
 
     def delete(self, memory_id: str) -> bool:
         if self._is_tenant and self.get(memory_id) is None:

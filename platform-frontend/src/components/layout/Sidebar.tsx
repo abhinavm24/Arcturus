@@ -2,13 +2,13 @@ import React from 'react';
 import {
     Plus, Clock, Search, Trash2, Database, Box, PlayCircle, Brain,
     LayoutGrid, Newspaper, GraduationCap, Settings, Code2, Loader2, Notebook,
-    CalendarClock, Terminal, Zap, Wand2
+    CalendarClock, Terminal, Zap, Wand2, FolderOpen
 } from 'lucide-react';
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAppStore } from '@/store';
 import { cn } from '@/lib/utils';
 import { API_BASE } from '@/lib/api';
@@ -26,7 +26,7 @@ import { StudioSidebar } from '@/features/studio/StudioSidebar';
 const NavIcon = ({ icon: Icon, label, tab, active, onClick }: {
     icon: any,
     label: string,
-    tab?: 'runs' | 'rag' | 'notes' | 'mcp' | 'remme' | 'explorer' | 'apps' | 'news' | 'learn' | 'settings' | 'ide' | 'scheduler' | 'console' | 'skills' | 'canvas' | 'studio',
+    tab?: 'runs' | 'spaces' | 'rag' | 'notes' | 'mcp' | 'remme' | 'explorer' | 'apps' | 'news' | 'learn' | 'settings' | 'ide' | 'scheduler' | 'console' | 'skills' | 'canvas' | 'studio',
     active: boolean,
     onClick: () => void
 }) => {
@@ -104,25 +104,54 @@ export const Sidebar: React.FC<{ hideSubPanel?: boolean }> = ({ hideSubPanel }) 
         fetchRuns();
     }, [fetchRuns]);
 
+    // Spaces moved to header modal; redirect if persisted tab was 'spaces'
+    React.useEffect(() => {
+        if (sidebarTab === 'spaces') {
+            setSidebarTab('runs');
+        }
+    }, [sidebarTab, setSidebarTab]);
+
     const isNewRunOpen = useAppStore(state => state.isNewRunOpen);
     const setIsNewRunOpen = useAppStore(state => state.setIsNewRunOpen);
+    const spaces = useAppStore(state => state.spaces);
+    const currentSpaceId = useAppStore(state => state.currentSpaceId);
+    const fetchSpaces = useAppStore(state => state.fetchSpaces);
     const [newQuery, setNewQuery] = React.useState("");
     const [searchQuery, setSearchQuery] = React.useState("");
     const [isOptimizing, setIsOptimizing] = React.useState(false);
+    const [runSpaceId, setRunSpaceId] = React.useState<string | null>(null);
 
-    // Filter runs
+    // Sync run space from current space when dialog opens
+    React.useEffect(() => {
+        if (isNewRunOpen) {
+            setRunSpaceId(currentSpaceId);
+            fetchSpaces();
+        }
+    }, [isNewRunOpen, currentSpaceId, fetchSpaces]);
+
+    // Filter runs by search and by space (Phase 4). When a space is selected, show only runs in that space.
     const filteredRuns = React.useMemo(() => {
-        if (!searchQuery.trim()) return runs;
-        return runs.filter(run =>
-            run.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            run.id.includes(searchQuery)
-        );
-    }, [runs, searchQuery]);
+        let list = runs;
+        if (currentSpaceId) {
+            list = list.filter((r) => r.space_id === currentSpaceId);
+        }
+        if (searchQuery.trim()) {
+            list = list.filter((run) =>
+                run.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                run.id.includes(searchQuery)
+            );
+        }
+        return list;
+    }, [runs, searchQuery, currentSpaceId]);
+
+    const currentSpaceName = currentSpaceId
+        ? spaces.find((s) => s.space_id === currentSpaceId)?.name || 'Space'
+        : 'Global';
 
     const handleStartRun = async () => {
         if (!newQuery.trim()) return;
         setIsNewRunOpen(false);
-        await createNewRun(newQuery);
+        await createNewRun(newQuery, undefined, runSpaceId);
         setNewQuery("");
     };
 
@@ -165,18 +194,19 @@ export const Sidebar: React.FC<{ hideSubPanel?: boolean }> = ({ hideSubPanel }) 
                     {sidebarTab === 'runs' && (
                         <div className="flex flex-col h-full bg-transparent text-foreground">
 
-                            <div className="p-2 border-b border-border/50 bg-muted/20 flex items-center gap-1.5 shrink-0">
-                                <div className="relative flex-1 group">
-                                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground group-hover:text-foreground transition-colors" />
-                                    <Input
-                                        className="w-full bg-background/50 border-transparent focus:bg-background focus:border-border rounded-md text-xs pl-8 pr-2 h-8 transition-all placeholder:text-muted-foreground"
-                                        placeholder="Search runs..."
-                                        value={searchQuery}
-                                        onChange={(e) => setSearchQuery(e.target.value)}
-                                    />
-                                </div>
+                            <div className="p-2 border-b border-border/50 bg-muted/20 space-y-2 shrink-0">
+                                <div className="flex items-center gap-1.5">
+                                    <div className="relative flex-1 group">
+                                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground group-hover:text-foreground transition-colors" />
+                                        <Input
+                                            className="w-full bg-background/50 border-transparent focus:bg-background focus:border-border rounded-md text-xs pl-8 pr-2 h-8 transition-all placeholder:text-muted-foreground"
+                                            placeholder="Search runs..."
+                                            value={searchQuery}
+                                            onChange={(e) => setSearchQuery(e.target.value)}
+                                        />
+                                    </div>
 
-                                <Dialog open={isNewRunOpen} onOpenChange={setIsNewRunOpen}>
+                                    <Dialog open={isNewRunOpen} onOpenChange={setIsNewRunOpen}>
                                     <DialogTrigger asChild>
                                         <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-background/80" title="New Run">
                                             <Plus className="w-4 h-4" />
@@ -188,7 +218,26 @@ export const Sidebar: React.FC<{ hideSubPanel?: boolean }> = ({ hideSubPanel }) 
                                         </DialogHeader>
                                         <div className="space-y-4 py-4">
                                             <div className="space-y-2">
-                                                <label className="text-sm font-medium text-muted-foreground">What should the agent do?</label>
+                                                <Label className="text-sm font-medium text-muted-foreground">Space</Label>
+                                                <Select
+                                                    value={runSpaceId ?? "__global__"}
+                                                    onValueChange={(v) => setRunSpaceId(v === "__global__" ? null : v)}
+                                                >
+                                                    <SelectTrigger className="bg-muted border-input text-foreground">
+                                                        <SelectValue placeholder="Global" />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        <SelectItem value="__global__">Global (all runs)</SelectItem>
+                                                        {spaces.map((s) => (
+                                                            <SelectItem key={s.space_id} value={s.space_id}>
+                                                                {s.name || 'Unnamed Space'}
+                                                            </SelectItem>
+                                                        ))}
+                                                    </SelectContent>
+                                                </Select>
+                                            </div>
+                                            <div className="space-y-2">
+                                                <Label className="text-sm font-medium text-muted-foreground">What should the agent do?</Label>
                                                 <div className="relative">
                                                     <Input
                                                         placeholder="e.g., Research latest AI trends..."
@@ -233,7 +282,16 @@ export const Sidebar: React.FC<{ hideSubPanel?: boolean }> = ({ hideSubPanel }) 
                                             <Button onClick={handleStartRun} className="bg-neon-yellow text-white hover:bg-neon-yellow/90 font-semibold">Start Run</Button>
                                         </DialogFooter>
                                     </DialogContent>
-                                </Dialog>
+                                    </Dialog>
+                                </div>
+                                <button
+                                    onClick={() => useAppStore.getState().setIsSpacesModalOpen(true)}
+                                    className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1"
+                                    title="Manage Spaces"
+                                >
+                                    <FolderOpen className="w-3 h-3" />
+                                    Space: {currentSpaceName}
+                                </button>
                             </div>
 
                             {/* List - Matches Remme Style */}

@@ -10,6 +10,8 @@
 
 **Phase 3: Spaces (3A, 3B, 3C)** — Space nodes, memory/fact/session scoping, retrieval filtering, APIs.
 
+**Phase 4: Sync Engine** — CRDT-style LWW sync, push/pull API, selective sync per space, startup and post-write sync trigger, frontend “Keep on this device only,” apply-latency and load tests.
+
 ### Completed
 
 **Phase 1**
@@ -62,20 +64,38 @@
 - **Run scoping**: `RunRequest.space_id`; `process_run` passes `space_id` to retrieval and ingestion
 - **Memories inherit space** from session when provided
 
-### Next: Space Introduction in UI
+**Phase 3.5 — Space UI (delivered)**
+- **SpacesPanel**, **SpacesModal** (platform-frontend): Create/list/select spaces; space selector in New Run and Add Memory
+- **API**: `createSpace(name, description?, sync_policy?)`; `space_id` passed to `createRun`, `addMemory`, `getMemories`
+- **Store**: SpacesSlice, `currentSpaceId` persisted; runs and memories filtered by selected space
 
-**First priority after Phase 3** — Add Space UI so users can create, select, and manage spaces:
-- Create space (call `POST /remme/spaces`)
-- Space selector when starting a run or adding a memory
-- Pass `space_id` in `POST /runs` and `POST /remme/add` when a space is selected
-- List and manage spaces (call `GET /remme/spaces`)
+**Phase 4 (Sync Engine)**
+- **Config** (`memory/sync_config.py`): `SYNC_ENGINE_ENABLED`, `SYNC_SERVER_URL`, `get_device_id()` (cached)
+- **Sync package** (`memory/sync/`): `schema.py` (Push/Pull request/response, MemoryDelta, SpaceDelta, SyncChange), `policy.py` (should_sync_space, filter by sync_policy), `merge.py` (LWW), `change_tracker.py`, `transport.py` (HTTP push/pull), `engine.py` (SyncEngine, get_sync_engine)
+- **Backend API** (`routers/sync.py`): `POST /api/sync/push`, `POST /api/sync/pull`, `POST /api/sync/trigger`; sync log per user; apply LWW on push
+- **Qdrant payload**: `version`, `device_id`, `updated_at`, `deleted` on memories; `sync_upsert()` for applying pulled memories
+- **Neo4j Space**: `sync_policy`, `version`, `device_id`, `updated_at`; `create_space(sync_policy=)`, `upsert_space()`, `delete_space()`; `get_spaces_for_user` returns sync_policy
+- **Integration**: Startup background sync when enabled; after `add_memory` and `create_space` enqueue background sync
+- **Frontend**: Create Space checkbox “Keep on this device only (don’t sync to cloud)” → `sync_policy: local_only`
+- **Tests**: Unit (merge, policy), integration (two devices converge, B pushes A receives, apply-latency &lt;150ms, load three devices + one pull, reconnection second pull idempotent)
+- **Setup**: `P11_mnemo_SETUP_GUIDE.md` — Phase 4 section (one-server vs two-stores, env vars)
 
-### Deferred
-- Space introduction in UI (first priority; see **Next** above)
-- Cross-device sync (`memory/sync.py`), CRDT
-- Lifecycle manager (`memory/lifecycle.py`), importance scoring, archival
-- Frontend: knowledge graph explorer, spaces manager
-- Performance and optimization (qdrant index optimization)
+### Next: Phase 5 and remaining
+
+**First priority** — Phase 5 (see P11_UNIFIED_REFERENCE.md §8.8):
+1. **Optional login/register** (first): Guest user_id, register, login, associate guest data to account, migrate sessions/memories to logged-in user_id; then sync auth can use login token.
+2. **UI edit (frontend)** for preferences/facts; backend ready (`PUT /remme/preferences/facts`).
+3. **user_id FE ownership** (may be partly addressed by login).
+4. **Lifecycle Manager** (`memory/lifecycle.py`): importance scoring, archival, contradiction resolution.
+5. **Other**: expansion depth, retrieval scoping by space, graph explorer, spaces manager.
+
+### Deferred / remaining
+- **Auth on sync endpoints**: Deferred to Phase 5 (login); sync currently accepts body `user_id` with no auth.
+- **Lifecycle manager**: Importance, archival, contradiction resolution (Phase 5).
+- **Session-level extraction**: Single pass for memories + preferences + entities from session (§8.2).
+- **Retrieval scoping by space**: List/filter done; full retrieval constrained by space deferred.
+- **Frontend**: Graph explorer, spaces manager (beyond current panel/modal).
+- **Performance**: P95 &lt; 250ms retrieval benchmark; qdrant index tuning.
 
 ## 2. Architecture Changes
 
@@ -108,7 +128,17 @@ core/skills/library/unified_extraction/ — Unified extraction skill (SKILL.md)
 scripts/migrate_hubs_to_neo4j.py — One-time JSON hubs → Neo4j Facts
 
 # Phase 3 (Spaces)
-memory/space_constants.py        — SPACE_ID_GLOBAL = "__global__"
+memory/space_constants.py        — SPACE_ID_GLOBAL, SYNC_POLICY_SYNC, SYNC_POLICY_LOCAL_ONLY
+
+# Phase 4 (Sync Engine)
+memory/sync_config.py           — is_sync_engine_enabled(), get_sync_server_url(), get_device_id()
+memory/sync/schema.py           — PushRequest/Response, PullRequest/Response, MemoryDelta, SpaceDelta, SyncChange
+memory/sync/policy.py           — should_sync_space(), filter_spaces_for_sync()
+memory/sync/merge.py            — lww_wins(), merge_memory_change(), merge_space_change()
+memory/sync/change_tracker.py   — build_memory_deltas(), build_space_deltas(), build_push_changes()
+memory/sync/transport.py        — push_changes(), pull_changes() (HTTP client)
+memory/sync/engine.py           — SyncEngine (push, pull, sync), get_sync_engine(), run_sync_background
+routers/sync.py                 — POST /api/sync/push, /sync/pull, /sync/trigger
 ```
 
 ### Data Flow
@@ -135,23 +165,29 @@ Memory retrieval (runs.py → memory_retriever.retrieve)
 ## 3. API And UI Changes
 
 ### Backend
-- **New REST endpoints (Phase 3)**:
-  - `POST /api/remme/spaces` — Create space (`CreateSpaceRequest`: name, description)
-  - `GET /api/remme/spaces` — List user spaces
+- **REST endpoints (Phase 3)**:
+  - `POST /api/remme/spaces` — Create space (`CreateSpaceRequest`: name, description, optional `sync_policy`)
+  - `GET /api/remme/spaces` — List user spaces (returns sync_policy, version, etc.)
   - `POST /api/remme/add` — Add memory (optional `space_id` in body)
   - `GET /api/remme/preferences` — Get preferences (optional `space_id`, `space_ids` query params)
   - `POST /api/runs` — Start run (optional `space_id` in body)
+- **REST endpoints (Phase 4 Sync)**:
+  - `POST /api/sync/push` — Push changes (user_id, device_id, changes)
+  - `POST /api/sync/pull` — Pull changes since cursor
+  - `POST /api/sync/trigger` — Manually run sync (push then pull)
 - **Env vars**:
   - Phase 1: `VECTOR_STORE_PROVIDER` (qdrant|faiss), `QDRANT_URL`, `QDRANT_API_KEY`
   - Phase 2/3: `NEO4J_ENABLED` (true|false), `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD`
   - Phase 2.5/3: `MNEMO_ENABLED` (true|false) — gates unified extractor, Neo4j Fact/Evidence, adapter
+  - Phase 4: `SYNC_ENGINE_ENABLED` (true|false), `SYNC_SERVER_URL`, optional `DEVICE_ID`
 - **Programmatic**:
   - `from memory.vector_store import get_vector_store; store = get_vector_store(provider="qdrant")`
   - `from memory.knowledge_graph import get_knowledge_graph; kg = get_knowledge_graph()` (when `NEO4J_ENABLED=true`)
 
 ### Frontend
-- No new UI yet; memory retrieval and knowledge graph remain internal to agent flow
-- **Next: Space introduction in UI** — create/select space, pass `space_id` when starting runs or adding memories
+- **Spaces UI (Phase 3)**: SpacesPanel, SpacesModal; create/list/select spaces; space selector in New Run and Add Memory; `currentSpaceId` persisted; runs and memories filtered by selected space.
+- **Phase 4**: Create Space dialog includes “Keep on this device only (don’t sync to cloud)” checkbox; `api.createSpace(name, description?, sync_policy?)`; store passes `sync_policy` to API.
+- **Next (Phase 5)**: Login/register UI, preferences/facts edit UI, user_id from frontend when logged in.
 
 ## 4. Mandatory Test Gate Definition
 - Acceptance file: `tests/acceptance/p11_mnemo/test_memory_influences_planner_output.py`
@@ -195,6 +231,14 @@ uv run pytest tests/unit/memory/test_space_scenarios.py -v -m "not slow"
 16 passed — space constants, registry scope, RunRequest, memory_retriever filter, adapter params
 ```
 
+### Sync (Phase 4) — unit and integration
+```bash
+uv run pytest tests/unit/memory/test_sync_merge_and_policy.py -v
+uv run pytest tests/integration/test_sync_two_devices_converge.py -v -m slow
+```
+- Unit: 19 passed (LWW merge, policy should_sync_space, filter_spaces_for_sync)
+- Integration: 5 passed (two devices converge, B pushes A receives, apply-latency &lt;150ms, load three devices + pull, reconnection second pull idempotent)
+
 ## 6. Existing Baseline Regression Status
 - **Command**: `scripts/test_all.sh quick`
 - **Expected**: Backend and frontend tests pass; no regressions from P11 changes
@@ -207,12 +251,15 @@ uv run pytest tests/unit/memory/test_space_scenarios.py -v -m "not slow"
 - **Qdrant Cloud**: Uses API key authentication; ensure keys are scoped and rotated as needed
 
 ## 8. Known Gaps
-- **Space introduction in UI**: Backend ready; users cannot yet create/select spaces in the UI (first priority)
-- **Graph expansion depth & payload:** `expand_from_entities` currently does one-hop expansion; `depth` is reserved for future multi-hop traversal. Entity-friendly payloads (composite keys or richer labels in Qdrant) remain optional and are not yet implemented beyond `entity_ids` + optional `entity_labels`.
-- **Sync**: No cross-device or CRDT sync
-- **Lifecycle**: No importance scoring, archival, or contradiction resolution
-- **Retrieval latency**: P95 < 250ms target to be benchmarked; not yet measured
-- **Acceptance/integration**: Current tests are structural (charter, files, CI); feature-level tests (memory influences planner, cross-project retrieval) to be expanded per charter contract
+- **Phase 5 (next)**: Optional login/register, UI edit for preferences/facts, user_id FE ownership, Lifecycle Manager (importance, archival, contradiction resolution). See P11_UNIFIED_REFERENCE.md §8.8.
+- **Sync auth**: Sync endpoints accept `user_id` in body with no authentication; to be tied to login when Phase 5 login is implemented.
+- **Graph expansion depth & payload:** `expand_from_entities` currently one-hop; `depth` reserved for multi-hop. Entity-friendly payloads beyond `entity_ids` + optional `entity_labels` remain optional.
+- **Session-level extraction**: Single pass for memories + preferences + entities from session not yet implemented (§8.2).
+- **Retrieval scoping by space**: List/filter by space done; full retrieval constrained to space deferred (§8.4).
+- **Lifecycle**: No importance scoring, archival, or contradiction resolution (Phase 5).
+- **Retrieval latency**: P95 < 250ms target to be benchmarked; not yet measured.
+- **Frontend**: Graph explorer, spaces manager (beyond current panel/modal) deferred.
+- **Acceptance/integration**: Structural tests in place; feature-level tests (memory influences planner, cross-project retrieval) to be expanded per charter contract.
 
 ## 9. Rollback Plan
 - **Config rollback**: Set `VECTOR_STORE_PROVIDER=faiss` (or unset); application reverts to FAISS

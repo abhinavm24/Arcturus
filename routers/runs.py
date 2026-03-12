@@ -198,6 +198,15 @@ async def process_run(
                             _space_id = kg.get_space_for_session(run_id)
                     except Exception:
                         pass
+                # Link session to space at run start so the run appears under the space even if no memories are extracted
+                if _space_id is not None:
+                    try:
+                        from memory.knowledge_graph import get_knowledge_graph
+                        _kg = get_knowledge_graph()
+                        if _kg and _kg.enabled:
+                            _kg.get_or_create_session(run_id, space_id=_space_id)
+                    except Exception:
+                        pass
                 memory_context, results = retrieve(
                     query,
                     session_id=run_id,
@@ -292,6 +301,7 @@ async def process_run(
                     extraction = await asyncio.to_thread(
                         unified.extract_from_session, query, history, existing_memories=results
                     )
+                    print(f" Remme: Extracted MEM from run {run_id}---->{extraction}")
                     commands = [{"action": m.action, "text": m.text, "id": m.id} for m in extraction.memories]
                     preferences = None  # do not write to hubs; step 3 ingests facts to Neo4j
                 else:
@@ -650,16 +660,28 @@ async def list_runs():
                         (n.get("total_tokens", 0) or 0) for n in nodes
                     )
                     
+                    run_id = session_file.stem.replace("session_", "")
                     runs.append({
-                        "id": session_file.stem.replace("session_", ""),
-                        "query": query, 
-                        "created_at": created_at, 
+                        "id": run_id,
+                        "query": query,
+                        "created_at": created_at,
                         "status": computed_status,
-                        "total_tokens": total_tokens
+                        "total_tokens": total_tokens,
                     })
-                except:
+                except Exception:
                     continue
-    
+
+    # Phase 4: Enrich with space_id from Neo4j so frontend can filter by space
+    try:
+        from memory.knowledge_graph import get_knowledge_graph
+        kg = get_knowledge_graph()
+        if kg is not None:
+            for r in runs:
+                space_id = kg.get_space_for_session(r["id"])
+                r["space_id"] = space_id
+    except Exception:
+        pass
+
     # Sort by recent
     return sorted(runs, key=lambda x: x['id'], reverse=True)
 
