@@ -9,9 +9,10 @@
 - **Barge-in Safety Hold**: A 2-second accumulation window after detection to ensure user speech is fully captured before STT aggregation begins.
 - **STT Pre-filling**: A ring buffer captures the last 500ms of audio during barge-in detection and pushes it to STT, ensuring no user speech is lost during the interruption phase.
 - **Streaming TTS**: Both Azure Speech and Piper (local) support real-time word-by-word streaming for "instant-on" responses.
-- **Sandbox Tool Aliasing**: Intelligent resolution for halluncinated tool names (e.g. `fetchsearchurls` → `fetch_search_urls`) to ensure voice commands resolve reliably.
+- **Sandbox Tool Aliasing**: Intelligent resolution for hallucinated tool names (e.g. `fetchsearchurls` → `fetch_search_urls`) to ensure voice commands resolve reliably.
 - **Clean Spoken Output**: Comprehensive 13-step text cleaner that strips markdown, Python error traces, and internal role labels (like "Captain") before synthesis.
 - **Dictation Mode**: Long-form speech → document input. Say "start dictation", speak freely, and the pipeline accumulates every STT fragment into a persistent `.txt` document saved under `memory/dictation/`. Retrievable via REST API.
+- **Echo Panel (UI)**: Real-time visual feedback for voice states (Idle, Listening, Thinking, Speaking) with streaming transcript display and wake-word indicators.
 - **User query**: Forwarded to the nexus as a channel
 - **30-second follow-up window**: No wake word required for 30 seconds after agent response
 - Configurable engine selection and STT provider through `voice/config.py`
@@ -182,10 +183,10 @@ api.py (lifespan startup)
 - **Safety:** Falls back to raw text if LLM fails or returns garbage
 - **Configurable:** Toggle on/off and change model via `voice/config.py` → `text_refiner`
 
-### 2.8 TTS — Text-to-Speech (🔲 placeholder)
+### 2.8 TTS — Text-to-Speech (✅ implemented)
 
-- **Choice:** Azure Speech | `piper-tts` (local), fallback: Coqui TTS
-- **Rule:** TTS must obey hard stop within <50ms on interrupt.
+- **Choice**: Azure Speech | `piper-tts` (local)
+- **Rule**: TTS must obey hard stop within <50ms on interrupt.
 
 ### 2.9 Agent (✅ implemented)
 
@@ -226,6 +227,7 @@ Unlike standard chat, the voice pipeline handles ambiguity as a blocking state. 
 - **Voice Router**: Added `/api/voice/start` (POST) to allow triggering the voice listening state via the web UI or external events.
 - **Provider Selection at Startup**: `api.py` reads `VOICE_CONFIG["stt_provider"]` and instantiates either `STTService` (Whisper) or `DeepgramSTTService` — the Orchestrator is provider-agnostic.
 - **Startup Log**: The console prints `✅ [Voice] Pipeline WARM and listening (Provider: whisper|deepgram)` on successful initialization.
+- **Echo Sidebar Integration**: Dedicated UI panel in the platform for real-time interaction status and manual trigger bypass.
 
 ---
 
@@ -244,7 +246,7 @@ Unlike standard chat, the voice pipeline handles ambiguity as a blocking state. 
 - ✅ Deepgram STT streams and transcribes via WebSocket (cloud)
 - ✅ TextRefiner post-processes raw transcripts (punctuation, numbers, grammar)
 - ✅ Orchestrator logs refined text to console with diff view when refinement occurs
-- 🔲 Full STT → Refiner → Agent → TTS roundtrip with voice playback (agent responds, TTS pending)
+- ✅ Full STT → Refiner → Agent → TTS roundtrip with voice playback (End-to-end pipeline verified)
 
 ---
 

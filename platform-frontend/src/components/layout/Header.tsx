@@ -4,7 +4,7 @@ import {
     LayoutGrid, Newspaper, GraduationCap, Settings, Plus,
     RefreshCw, Zap, Sparkles, X, FolderPlus, UploadCloud, Search,
     Loader2, ChevronLeft, Notebook, LayoutDashboard, Bell,
-    CalendarClock, Terminal, FolderOpen, Mic, Wand2, ShieldCheck, ShieldOff, Volume2, ChevronDown
+    CalendarClock, Terminal, FolderOpen, Mic, Wand2, ShieldCheck, ShieldOff, Volume2, ChevronDown, Cloud
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from "@/components/ui/button";
@@ -402,28 +402,30 @@ export const Header: React.FC = () => {
                         disabled={privacyLoading || privacyMode === null}
                         title={
                             privacyMode === null
-                                ? 'Loading privacy state...'
+                                ? 'Loading voice mode...'
                                 : privacyMode
-                                    ? 'Privacy Mode ON — click to switch to cloud (Deepgram + Azure)'
-                                    : 'Privacy Mode OFF — click to go fully local (Whisper + Piper)'
+                                    ? 'Privacy Mode ON — currently local (Whisper + Piper)'
+                                    : 'Cloud Mode ON — currently cloud (Deepgram + Azure)'
                         }
                         className={cn(
                             'flex items-center gap-1.5 px-3 py-1.5 rounded-full border transition-all duration-200 no-drag',
-                            privacyMode
-                                ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/25'
-                                : 'bg-muted/40 border-border/50 text-muted-foreground hover:text-foreground hover:bg-muted/60',
+                            privacyMode === false
+                                ? 'bg-sky-500/15 border-sky-500/40 text-sky-400 hover:bg-sky-500/25'
+                                : privacyMode === true
+                                    ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/25'
+                                    : 'bg-muted/40 border-border/50 text-muted-foreground hover:text-foreground hover:bg-muted/60',
                             (privacyLoading || privacyMode === null) && 'opacity-50 cursor-not-allowed'
                         )}
                     >
                         {privacyLoading ? (
                             <Loader2 className="w-3 h-3 animate-spin" />
-                        ) : privacyMode ? (
-                            <ShieldCheck className="w-3 h-3" />
+                        ) : privacyMode === false ? (
+                            <Cloud className="w-3 h-3" />
                         ) : (
-                            <ShieldOff className="w-3 h-3" />
+                            <ShieldCheck className="w-3 h-3" />
                         )}
                         <span className="text-[10px] font-bold uppercase tracking-widest">
-                            {privacyMode ? 'Private' : 'Cloud'}
+                            {privacyMode === null ? 'Voice' : privacyMode ? 'Private' : 'Cloud'}
                         </span>
                     </button>
 

@@ -21,7 +21,7 @@ interface RunSlice {
     runs: Run[];
     currentRun: Run | null;
     addRun: (run: Run) => void;
-    setCurrentRun: (runId: string) => void;
+    setCurrentRun: (runId: string | null) => void;
     updateRunStatus: (input: { id: string, status: Run['status'] }) => void;
     fetchRuns: () => Promise<void>;
     createNewRun: (query: string, model?: string, space_id?: string | null) => Promise<void>;

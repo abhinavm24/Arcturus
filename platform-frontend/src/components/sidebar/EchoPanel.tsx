@@ -118,6 +118,23 @@ export const EchoPanel: React.FC = () => {
         } catch { /* backend not ready */ }
     }, []);
 
+    const handleResetConversation = async () => {
+        try {
+            const res = await fetch('http://localhost:8000/api/voice/session', {
+                method: 'DELETE',
+            });
+            if (res.ok) {
+                setConversation([]);
+                setStatusText('Conversation ended and cleared.');
+                setLiveTranscript('');
+                // Brief reassurance before returning to idle
+                setTimeout(() => setStatusText('Waiting for wake word...'), 2000);
+            }
+        } catch (e) {
+            console.error('Failed to end conversation', e);
+        }
+    };
+
     const changePersona = async (name: string) => {
         if (personaChanging || !personasState) return;
         if (name === personasState.active) return;
@@ -151,9 +168,10 @@ export const EchoPanel: React.FC = () => {
     nexusRunRef.current = nexusRunActive;
     const bottomRef = useRef<HTMLDivElement>(null);
 
-    // Auto-scroll
+    // Auto-scroll disabled for newest-at-top
     useEffect(() => {
-        bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+        // We want the view to stay at the top where the new content appears
+        // bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [conversation]);
 
     // Fetch privacy + personas on mount
@@ -199,70 +217,101 @@ export const EchoPanel: React.FC = () => {
         return () => { if (pollRef.current) clearInterval(pollRef.current); };
     }, [sidebarTab, setSidebarTab]);
 
-    // ── SSE event handler ────────────────────────────────────────────────────
+    // ── SSE event handler (Robustly processes ALL new events) ────────────────
+    const lastProcessedIndex = useRef(-1);
     useEffect(() => {
-        if (!events || events.length === 0) return;
-        const ev = events[events.length - 1];
+        if (!events || events.length === 0) {
+            lastProcessedIndex.current = -1;
+            return;
+        }
 
-        if (ev.type === 'voice_wake') {
-            setIsListening(true);
-            setStatusText('Listening...');
-            setLiveTranscript('');
-            setNexusRunActive(false);
-            if (sidebarTab !== 'echo') setSidebarTab('echo');
-        } else if (ev.type === 'voice_stt') {
-            if (ev.data?.full_text) setLiveTranscript(ev.data.full_text);
-        } else if (ev.type === 'voice_nexus_run') {
-            const active = ev.data?.active === true;
-            setNexusRunActive(active);
-            if (active) {
+        // Process all events from (lastProcessedIndex + 1) to the end
+        const startIndex = lastProcessedIndex.current + 1;
+        for (let i = startIndex; i < events.length; i++) {
+            const ev = events[i];
+            
+            if (ev.type === 'voice_wake') {
+                const isBargeIn = ev.data?.barge_in === true;
                 setIsListening(true);
-                setStatusText('Processing with Nexus...');
-                setLiveTranscript(prev => {
-                    if (prev.trim()) {
-                        setConversation(c => [...c, {
-                            id: `u-${Date.now()}`,
-                            role: 'user',
-                            text: prev.trim(),
-                            ts: Date.now(),
-                        }]);
-                    }
-                    return '';
-                });
-            }
-        } else if (ev.type === 'voice_tts') {
-            if (ev.data?.text?.trim()) {
-                setConversation(c => [...c, {
-                    id: `a-${Date.now()}-${Math.random()}`,
-                    role: 'assistant',
-                    text: ev.data.text.trim(),
-                    source: ev.data.source,
-                    ts: Date.now(),
-                }]);
-            }
-        } else if (ev.type === 'voice_state') {
-            const s = ev.data?.state;
-            if (s === 'LISTENING') {
-                setIsListening(true); setStatusText('Listening...'); setNexusRunActive(false);
-            } else if (s === 'THINKING') {
-                setIsListening(true);
-                setStatusText(nexusRunRef.current ? 'Processing with Nexus...' : 'Thinking...');
-            } else if (s === 'SPEAKING') {
-                if (!nexusRunRef.current) { setIsListening(true); setStatusText('Speaking...'); }
-            } else if (s === 'DICTATING') {
-                setIsListening(true); setStatusText('Dictating — say "stop dictation" to finish.');
-            } else if (s === 'IDLE') {
-                setIsListening(false); setStatusText('Waiting for wake word...'); setNexusRunActive(false);
-                setLiveTranscript(prev => {
-                    if (prev.trim()) {
-                        setConversation(c => [...c, {
-                            id: `u-${Date.now()}`, role: 'user', text: prev.trim(), ts: Date.now(),
-                        }]);
-                    }
-                    return '';
-                });
+                setStatusText(isBargeIn ? '⚡ Barge-in detected!' : 'Listening...');
+                setLiveTranscript('');
+                setNexusRunActive(false);
+
+                // Stop agent runs on wake
+                useAppStore.getState().stopPolling();
+                useAppStore.getState().setCurrentRun(null);
+
+                if (isBargeIn) {
+                    // Drop previous dialogues on barge-in as requested
+                    setConversation([{
+                        id: `sys-barge-${Date.now()}`,
+                        role: 'assistant',
+                        text: '⚡ Barge-in detected',
+                        source: 'system',
+                        ts: Date.now(),
+                    }]);
+                }
+
+                if (sidebarTab !== 'echo') setSidebarTab('echo');
+            } else if (ev.type === 'voice_stt') {
+                if (ev.data?.full_text) setLiveTranscript(ev.data.full_text);
+            } else if (ev.type === 'voice_nexus_run') {
+                const active = ev.data?.active === true;
+                setNexusRunActive(active);
+                if (active) {
+                    setIsListening(true);
+                    setStatusText('Processing with Nexus...');
+                    setLiveTranscript(prev => {
+                        if (prev.trim()) {
+                            setConversation(c => [...c, {
+                                id: `u-${Date.now()}`,
+                                role: 'user',
+                                text: prev.trim(),
+                                ts: Date.now(),
+                            }]);
+                        }
+                        return '';
+                    });
+                }
+            } else if (ev.type === 'voice_tts') {
+                if (ev.data?.text?.trim()) {
+                    setConversation(c => [...c, {
+                        id: `a-${Date.now()}-${Math.random()}`,
+                        role: 'assistant',
+                        text: ev.data.text.trim(),
+                        source: ev.data.source,
+                        ts: Date.now(),
+                    }]);
+                }
+            } else if (ev.type === 'voice_state') {
+                const s = ev.data?.state;
+                if (s === 'LISTENING') {
+                    setIsListening(true); 
+                    // Don't overwrite explicit barge-in text if we just set it
+                    setStatusText(prev => prev === '⚡ Barge-in detected!' ? prev : 'Listening...'); 
+                    setNexusRunActive(false);
+                } else if (s === 'THINKING') {
+                    setIsListening(true);
+                    setStatusText(nexusRunRef.current ? 'Processing with Nexus...' : 'Thinking...');
+                } else if (s === 'SPEAKING') {
+                    if (!nexusRunRef.current) { setIsListening(true); setStatusText('Speaking...'); }
+                } else if (s === 'DICTATING') {
+                    setIsListening(true); setStatusText('Dictating — say "stop dictation" to finish.');
+                } else if (s === 'IDLE') {
+                    setIsListening(false); setStatusText('Waiting for wake word...'); setNexusRunActive(false);
+                    setLiveTranscript(prev => {
+                        if (prev.trim()) {
+                            setConversation(c => [...c, {
+                                id: `u-${Date.now()}`, role: 'user', text: prev.trim(), ts: Date.now(),
+                            }]);
+                        }
+                        return '';
+                    });
+                }
             }
         }
+        
+        lastProcessedIndex.current = events.length - 1;
     }, [events, sidebarTab, setSidebarTab]);
 
     const handleStart = async () => {
@@ -480,81 +529,73 @@ export const EchoPanel: React.FC = () => {
                 {/* Conversation view */}
                 {activeView === 'conversation' && (
                     <div className="h-full overflow-y-auto px-3 py-3 flex flex-col gap-3">
+                        {conversation.length > 0 && (
+                            <div className="shrink-0 flex justify-end mb-1">
+                                <button
+                                    onClick={handleResetConversation}
+                                    className="flex items-center gap-1.5 px-2 py-1 text-[9px] font-bold uppercase tracking-wider text-muted-foreground/60 hover:text-red-400 bg-muted/20 hover:bg-red-400/10 rounded-md border border-border/20 hover:border-red-400/30 transition-all duration-200"
+                                >
+                                    <XCircle className="w-3 h-3" />
+                                    End Conversation
+                                </button>
+                            </div>
+                        )}
                         {conversation.length === 0 && !liveTranscript && (
-                            <div className="flex-1 flex flex-col items-center justify-center text-center gap-4 select-none py-6 px-2">
-                                {/* Mic icon */}
-                                <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
-                                    <Mic className="w-5 h-5 text-primary/50" />
-                                </div>
-
-                                <p className="text-[11px] text-muted-foreground/70 leading-relaxed">
-                                    Start a voice conversation with Arcturus
-                                </p>
-
-                                {/* Sample script card */}
-                                <div className="w-full max-w-[280px] rounded-xl border border-border/30 bg-muted/15 overflow-hidden">
-                                    <div className="px-3 py-2 border-b border-border/20 bg-muted/20">
-                                        <span className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground/60">Try saying</span>
+                            <div className="flex-1 flex flex-col items-center justify-center text-center gap-6 select-none py-6 px-4">
+                                {/* Mic icon and Wake Word */}
+                                <div className="space-y-3">
+                                    <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mx-auto">
+                                        <Mic className="w-5 h-5 text-primary/50" />
                                     </div>
-                                    <div className="px-3 py-3 space-y-3">
-                                        {/* Step 1: Wake word */}
-                                        <div className="flex items-start gap-2">
-                                            <div className="shrink-0 w-4 h-4 rounded-full bg-primary/20 flex items-center justify-center mt-0.5">
-                                                <span className="text-[8px] font-bold text-primary">1</span>
-                                            </div>
-                                            <div>
-                                                <p className="text-[10px] text-muted-foreground/60 leading-none mb-1">Wake word</p>
-                                                <p className="text-xs font-semibold text-primary/80 italic">
-                                                    "Hey Arcturus"
-                                                </p>
-                                            </div>
-                                        </div>
-
-                                        {/* Connector */}
-                                        <div className="flex items-center gap-2 pl-2">
-                                            <div className="w-px h-3 bg-border/40 ml-[7px]" />
-                                        </div>
-
-                                        {/* Step 2: Your question */}
-                                        <div className="flex items-start gap-2">
-                                            <div className="shrink-0 w-4 h-4 rounded-full bg-primary/20 flex items-center justify-center mt-0.5">
-                                                <span className="text-[8px] font-bold text-primary">2</span>
-                                            </div>
-                                            <div>
-                                                <p className="text-[10px] text-muted-foreground/60 leading-none mb-1">Ask anything</p>
-                                                <p className="text-xs font-medium text-foreground/70">
-                                                    "What are the 2 key concepts of Quantum Computing?"
-                                                </p>
-                                            </div>
-                                        </div>
-
-                                        {/* Connector */}
-                                        <div className="flex items-center gap-2 pl-2">
-                                            <div className="w-px h-3 bg-border/40 ml-[7px]" />
-                                        </div>
-
-                                        {/* Step 3: Response */}
-                                        <div className="flex items-start gap-2">
-                                            <div className="shrink-0 w-4 h-4 rounded-full bg-violet-500/20 flex items-center justify-center mt-0.5">
-                                                <Bot className="w-2.5 h-2.5 text-violet-400" />
-                                            </div>
-                                            <div>
-                                                <p className="text-[10px] text-muted-foreground/60 leading-none mb-1">Arcturus responds</p>
-                                                <p className="text-[11px] text-foreground/50 leading-relaxed">
-                                                    Superposition and Entanglement are the two foundational concepts…
-                                                </p>
-                                            </div>
-                                        </div>
+                                    <div className="space-y-1">
+                                        <p className="text-[10px] uppercase font-bold tracking-widest text-muted-foreground/50">Wake Word</p>
+                                        <p className="text-sm font-semibold text-primary/90 italic">"Hey Arcturus"</p>
                                     </div>
                                 </div>
 
-                                <p className="text-[10px] text-muted-foreground/40 leading-relaxed max-w-[240px]">
+                                {/* Examples */}
+                                <div className="w-full max-w-[240px] space-y-3">
+                                    <div className="flex items-center gap-2">
+                                        <div className="h-px flex-1 bg-border/20" />
+                                        <p className="text-[10px] uppercase font-bold tracking-widest text-muted-foreground/50">Try Saying</p>
+                                        <div className="h-px flex-1 bg-border/20" />
+                                    </div>
+                                    <div className="space-y-2 text-left">
+                                        {[
+                                            "What is Quantum Computing?",
+                                            "Start transcribing",
+                                            "Open the Explorer"
+                                        ].map((example, i) => (
+                                            <div key={i} className="flex items-center gap-2.5 group cursor-pointer" onClick={() => startVoice()}>
+                                                <div className="w-1 h-1 rounded-full bg-primary/40 group-hover:bg-primary transition-colors" />
+                                                <p className="text-[11px] text-muted-foreground/70 group-hover:text-foreground transition-colors italic leading-tight">
+                                                    "{example}"
+                                                </p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <p className="text-[10px] text-muted-foreground/40 leading-relaxed max-w-[200px]">
                                     Or click the <Mic className="w-3 h-3 inline-block align-middle text-primary/50 mx-0.5" /> button above to start listening manually.
                                 </p>
                             </div>
                         )}
 
-                        {conversation.map(entry => (
+                        {/* Live transcript bubble - Moved to top for "newest first" view */}
+                        {liveTranscript && (
+                            <div className="flex gap-2 items-start flex-row-reverse">
+                                <div className="shrink-0 w-6 h-6 rounded-full flex items-center justify-center mt-0.5 bg-primary/20 text-primary">
+                                    <User className="w-3 h-3" />
+                                </div>
+                                <div className="max-w-[82%] rounded-2xl rounded-tr-sm px-3 py-2 text-xs leading-relaxed bg-primary/10 border border-primary/20 border-dashed text-foreground/80 italic">
+                                    {liveTranscript}
+                                    <span className="ml-1 inline-block w-0.5 h-3 bg-primary/60 animate-pulse rounded-full align-middle" />
+                                </div>
+                            </div>
+                        )}
+
+                        {[...conversation].reverse().map(entry => (
                             <div
                                 key={entry.id}
                                 className={cn('flex gap-2 items-start', entry.role === 'user' ? 'flex-row-reverse' : 'flex-row')}
@@ -597,19 +638,6 @@ export const EchoPanel: React.FC = () => {
                                 )}
                             </div>
                         ))}
-
-                        {/* Live transcript bubble */}
-                        {liveTranscript && (
-                            <div className="flex gap-2 items-start flex-row-reverse">
-                                <div className="shrink-0 w-6 h-6 rounded-full flex items-center justify-center mt-0.5 bg-primary/20 text-primary">
-                                    <User className="w-3 h-3" />
-                                </div>
-                                <div className="max-w-[82%] rounded-2xl rounded-tr-sm px-3 py-2 text-xs leading-relaxed bg-primary/10 border border-primary/20 border-dashed text-foreground/80 italic">
-                                    {liveTranscript}
-                                    <span className="ml-1 inline-block w-0.5 h-3 bg-primary/60 animate-pulse rounded-full align-middle" />
-                                </div>
-                            </div>
-                        )}
 
                         <div ref={bottomRef} />
                     </div>

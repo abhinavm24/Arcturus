@@ -196,16 +196,20 @@ class VoiceWakeService:
                                     self._barge_in_buffer.clear()
                                     self._barge_in_hold_buffer.clear()
                                     self._barge_in_detected_at = None
-
+                                    
                                     # Trigger wake flow — state → LISTENING, TTS cancel, nexus abort
                                     self.on_wake({"type": "BARGE_IN"})
                                     self._barge.reset_speech_streak()
                                 continue
 
                             elif interrupted:
-                                # ── FIRST DETECTION: start the hold window ──
+                                # ── FIRST DETECTION: stop TTS instantly and start hold window ──
                                 print(f"⚡ [Voice] VAD Barge-in detected! (RMS: {rms:.1f}, Ratio: {ratio:.2f}x) "
-                                      f"— holding {self._BARGE_IN_HOLD_SEC:.1f}s before STT aggregation.")
+                                      f"— stopping TTS and holding {self._BARGE_IN_HOLD_SEC:.1f}s for STT.")
+                                
+                                # Trigger wake flow instantly so TTS stops and UI updates
+                                self.on_wake({"type": "BARGE_IN"})
+                                
                                 self._barge_in_detected_at = time.time()
                                 self._barge_in_hold_buffer.clear()
                                 self._barge.reset_speech_streak()

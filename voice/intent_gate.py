@@ -93,20 +93,7 @@ _COMMAND_VERBS = {
     "create", "add", "delete", "remove", "set", "enable", "disable",
 }
 
-_SKILL_TRIGGERS = {
-    "dashboard":    "navigation",
-    "calendar":     "navigation",
-    "email":        "email",
-    "inbox":        "email",
-    "settings":     "navigation",
-    "profile":      "navigation",
-    "home":         "navigation",
-    "timer":        "timer",
-    "alarm":        "timer",
-    "reminder":     "reminder",
-    "note":         "note_taking",
-    "note down":    "note_taking",
-}
+
 
 # ── Navigation keyword → tab name mapping ─────────────────────────────────────
 # Keys are lowercased keywords; the first match wins.
@@ -128,6 +115,15 @@ _NAVIGATION_ROUTES: list[tuple[str, str]] = [
     ("canvas",       "canvas"),
     ("mcp",          "mcp"),
     ("remme",        "remme"),
+    ("memory",       "remme"),
+    ("vault",        "remme"),
+    ("news",         "news"),
+    ("search",       "news"),
+    ("learn",        "learn"),
+    ("echo",         "echo"),
+    ("voice",        "echo"),
+    ("apps",         "apps"),
+    ("builder",      "apps"),
     ("inbox",        "inbox"),
     ("calendar",     "calendar"),
     ("home",         "runs"),
@@ -208,8 +204,8 @@ def _score_command(text: str) -> float:
     # mention a skill keyword (e.g. "check my emails and summarize anything").
     has_agentic = any(re.search(p, t) for p in _AGENTIC_SIGNALS)
     if not has_agentic and len(words) <= 10:
-        for trigger, _ in _SKILL_TRIGGERS.items():
-            if trigger in t:
+        for keyword, _ in _NAVIGATION_ROUTES:
+            if keyword in t:
                 score += 0.30
                 break
     # Short utterance (≤6 words) with verb → high command likelihood
@@ -384,20 +380,112 @@ class IntentRouter:
         if not self.model_manager:
             return None
 
-        prompt = (
-            "You are the Intent Gate for Arcturus, a voice assistant.\n"
-            "Your task is to classify the user's utterance into exactly ONE of these three categories:\n\n"
-            "1. DICTATION: The user wants to record text exactly as said. Examples: 'start dictation', 'write this down', 'take a note: ...'.\n"
-            "2. COMMAND: The user wants a direct, deterministic action or UI navigation. Examples: 'open dashboard', 'show my settings', 'go to explorer'.\n"
-            "3. AGENTIC: Everything else. This includes questions, complex requests, tool usage, or multi-step reasoning. Examples: 'how is the weather?', 'find the bug in api.py', 'summarize my emails'.\n\n"
-            f"Utterance: \"{utterance}\"\n\n"
-            "Return your decision in JSON format:\n"
-            "{\n"
-            "  \"intent\": \"DICTATION\" | \"COMMAND\" | \"AGENTIC\",\n"
-            "  \"confidence\": 0.0 to 1.0,\n"
-            "  \"reasoning\": \"brief explanation\"\n"
-            "}"
-        )
+        prompt = f"""
+You are the **Intent Gate** for Arcturus, a voice assistant.
+
+Your job is to classify the user's utterance into EXACTLY ONE of these intents.
+
+INTENTS
+-------
+
+1. DICTATION
+User wants to record text exactly as spoken.
+
+Characteristics:
+- user wants transcription only
+- no action should be executed
+- words must be recorded verbatim
+
+Examples:
+"start dictation"
+"write this down"
+"take a note"
+"meeting notes colon we discussed roadmap"
+"record what I say"
+"dictate this"
+
+---
+
+2. COMMAND
+User wants a **direct deterministic action** or UI navigation.
+
+Characteristics:
+- usually short
+- often begins with a verb
+- requires immediate action
+- no reasoning required
+
+Examples:
+"open notes"
+"take me to RemMe"
+"go to explorer"
+"show my settings"
+"open dashboard"
+"navigate to calendar"
+"play music"
+"set a timer"
+
+---
+
+3. AGENTIC
+Everything else requiring reasoning, knowledge, tools, or analysis.
+
+Characteristics:
+- questions
+- explanations
+- summarization
+- research
+- multi-step tasks
+
+Examples:
+"how is the weather today"
+"explain transformers architecture"
+"find the bug in api.py"
+"summarize my emails"
+"check my calendar and tell me what meetings I have"
+"investigate why the build failed"
+
+---
+
+DECISION RULES
+--------------
+
+1. If the user wants **text written exactly**, choose DICTATION.
+2. If the user wants **navigation or a simple action**, choose COMMAND.
+3. If the user asks a **question or complex request**, choose AGENTIC.
+4. When uncertain between COMMAND and AGENTIC:
+   - choose COMMAND if it is a direct UI action
+   - otherwise choose AGENTIC.
+
+SAFETY RULE
+-----------
+AGENTIC should only be selected when reasoning or analysis is clearly required.
+
+---
+
+User Utterance:
+"{utterance}"
+
+---
+
+Return ONLY valid JSON in this format:
+
+{{
+  "intent": "DICTATION | COMMAND | AGENTIC",
+  "confidence": 0.0-1.0,
+  "reasoning": "short explanation"
+}}
+
+Example:
+User: open dashboard
+Intent: COMMAND
+
+User: take a note
+Intent: DICTATION
+
+User: explain transformers
+Intent: AGENTIC
+"""
 
         try:
             response_text = await self.model_manager.generate_text(prompt)
@@ -429,19 +517,22 @@ class IntentRouter:
         decision = None
         if self.model_manager:
             try:
-                # Handle async from sync context
-                try:
-                    loop = asyncio.get_running_loop()
-                except RuntimeError:
-                    loop = None
-
+                # Use the orchestrator's injected event loop to avoid AnyIO task/scope errors.
+                # creating a NEW loop via asyncio.run in a thread is hazardous for MCP/shared async resources.
+                loop = self._orch._event_loop
+                
                 if loop and loop.is_running():
-                    future = asyncio.run_coroutine_threadsafe(
-                        self._classify_llm(utterance), loop
-                    )
-                    llm_result = future.result(timeout=5.0)
+                    try:
+                        future = asyncio.run_coroutine_threadsafe(
+                            self._classify_llm(utterance), loop
+                        )
+                        llm_result = future.result(timeout=10.0)
+                    except Exception as e:
+                        print(f"⚠️ [IntentGate] LLM classification timed out or failed: {e}")
+                        llm_result = None
                 else:
-                    llm_result = asyncio.run(self._classify_llm(utterance))
+                    # No loop available (or startup phase) — fallback to rules
+                    llm_result = None
 
                 if llm_result:
                     intent, conf, reason = llm_result
@@ -454,7 +545,7 @@ class IntentRouter:
                         reasoning=f"LLM: {reason}"
                     )
             except Exception as e:
-                print(f"⚠️ [IntentGate] LLM classification error: {e}")
+                print(f"⚠️ [IntentGate] LLM classification block error: {e}")
 
         # 2. Fallback to rules if LLM disabled or failed
         if not decision:
@@ -485,23 +576,25 @@ class IntentRouter:
                 self._orch._dictation_session.push_fragment(utterance)
 
         elif intent == IntentType.COMMAND:
-            # ── DETERMINISTIC PATH: no LLM planning ─────────────────────────
-            matched_skill = self._match_skill(utterance)
-            if matched_skill == "navigation":
-                # Navigation is instant — publish event_bus event directly,
-                # NO Nexus run required.
-                print(f"⚡ [IntentGate] Navigation command — bypassing Nexus.")
+            # ── DETERMINISTIC PATH: only UI navigation ───────────────────────
+            # Check if this command maps to a known navigation route.
+            has_nav = False
+            t_lower = utterance.lower()
+            for keyword, _ in _NAVIGATION_ROUTES:
+                if keyword in t_lower:
+                    has_nav = True
+                    break
+
+            if has_nav:
+                print(f"🗺️ [IntentGate] Navigation command detected — bypassing Nexus.")
                 threading.Thread(
                     target=self._execute_navigation,
                     args=(utterance,),
                     daemon=True,
                 ).start()
-            elif matched_skill:
-                print(f"⚡ [IntentGate] Command → skill: {matched_skill}")
-                self._route_to_nexus(utterance)
             else:
-                # No known skill — safe-fallback to QUERY
-                print("⚡ [IntentGate] Command → no skill match, falling back to QUERY")
+                # Not a known navigation route — let Nexus handle it as a general query
+                print("⚡ [IntentGate] Command → not navigation, falling back to Nexus.")
                 self._route_to_nexus(utterance)
 
         # IntentType.QUERY does not exist — AGENTIC handles all Q&A via Nexus
@@ -520,9 +613,6 @@ class IntentRouter:
 
         Zero Nexus calls — completes in < 100 ms.
         """
-        import asyncio
-        from core.event_bus import event_bus
-
         t = utterance.lower()
         tab = "runs"  # sensible default
         for keyword, dest in _NAVIGATION_ROUTES:
@@ -532,21 +622,9 @@ class IntentRouter:
 
         print(f"🗺️ [IntentGate] Navigating to tab: '{tab}' (utterance: '{utterance[:60]}')")
 
-        # Publish navigation event on the asyncio event loop.
-        # The voice thread is NOT an async context, so we schedule the
-        # coroutine on the running loop via run_coroutine_threadsafe.
+        # Publish navigation event via the orchestrator's safe publish helper
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.run_coroutine_threadsafe(
-                    event_bus.publish("navigation", "voice_intent_gate", {"tab": tab}),
-                    loop,
-                ).result(timeout=2.0)
-            else:
-                # Fallback: run a fresh event loop (rare, e.g. unit tests)
-                asyncio.run(
-                    event_bus.publish("navigation", "voice_intent_gate", {"tab": tab})
-                )
+            self._orch._publish("navigation", {"tab": tab})
         except Exception as e:
             print(f"⚠️ [IntentGate] Navigation event publish failed: {e}")
 
@@ -555,9 +633,6 @@ class IntentRouter:
         with self._orch._lock:
             self._orch._set_state("SPEAKING")
         self._orch._speak(spoken, source="navigation")
-        with self._orch._lock:
-            if self._orch.state == "SPEAKING":
-                pass  # will enter follow-up below
         self._orch._enter_follow_up()
 
     def _route_to_nexus(self, utterance: str) -> None:
@@ -577,11 +652,4 @@ class IntentRouter:
             ).start()
 
 
-    @staticmethod
-    def _match_skill(utterance: str) -> Optional[str]:
-        """Return the skill name if utterance maps to a known trigger."""
-        t = utterance.lower()
-        for trigger, skill in _SKILL_TRIGGERS.items():
-            if trigger in t:
-                return skill
-        return None
+

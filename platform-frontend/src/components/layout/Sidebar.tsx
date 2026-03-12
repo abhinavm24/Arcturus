@@ -40,6 +40,7 @@ const NavIcon = ({ icon: Icon, label, tab, active, onClick }: {
     const selectedMcpServer = useAppStore(state => state.selectedMcpServer);
     const selectedRagFile = useAppStore(state => state.selectedRagFile);
     const showNewsChatPanel = useAppStore(state => state.showNewsChatPanel);
+    const currentRun = useAppStore(state => state.currentRun);
 
     const isInspectorOpen = React.useMemo(() => {
         if (sidebarTab === 'apps' && selectedAppCardId) return true;
@@ -48,8 +49,9 @@ const NavIcon = ({ icon: Icon, label, tab, active, onClick }: {
         if (sidebarTab === 'rag' && (ragActiveDocumentId || selectedRagFile)) return true;
         if (sidebarTab === 'mcp' && selectedMcpServer) return true;
         if (sidebarTab === 'news' && showNewsChatPanel) return true;
+        if (sidebarTab === 'echo' && currentRun) return true;
         return false;
-    }, [sidebarTab, selectedNodeId, selectedAppCardId, selectedExplorerNodeId, ragActiveDocumentId, selectedMcpServer, selectedRagFile, showNewsChatPanel]);
+    }, [sidebarTab, selectedNodeId, selectedAppCardId, selectedExplorerNodeId, ragActiveDocumentId, selectedMcpServer, selectedRagFile, showNewsChatPanel, currentRun]);
 
     const toggleSidebarSubPanel = useAppStore(state => state.toggleSidebarSubPanel);
 

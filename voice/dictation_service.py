@@ -124,6 +124,27 @@ class DictationSession:
         path = self._save_to_disk()
         print(f"💾 [Dictation] Auto-saved snapshot → {path}")
 
+    def save_to_notes(self) -> str:
+        """
+        Save the final document as Markdown to the central Notes directory.
+        Returns the saved file path string.
+        """
+        notes_dir = Path(__file__).resolve().parent.parent / "data" / "Notes" / "Voice"
+        notes_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Use a human-friendly timestamped name
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        filename = f"Dictation_{timestamp}.md"
+        filepath = notes_dir / filename
+        
+        doc_md = self.get_document_as_markdown(title=f"Voice Dictation ({timestamp})")
+        
+        with open(filepath, "w", encoding="utf-8") as fh:
+            fh.write(doc_md)
+            
+        print(f"📄 [Dictation] Saved Markdown note → {filepath}")
+        return str(filepath)
+
     # ── Private helpers ────────────────────────────────────────────
 
     def _save_to_disk(self) -> Path:

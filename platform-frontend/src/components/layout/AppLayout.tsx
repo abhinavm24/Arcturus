@@ -59,7 +59,7 @@ export const AppLayout: React.FC = () => {
         selectedMcpServer, selectedLibraryComponent, clearSelection, showRagInsights,
         isZenMode, isInboxOpen, setIsInboxOpen,
         isSidebarSubPanelOpen,
-        startEventStream, stopEventStream,
+        startEventStream, stopEventStream, currentRun
     } = useAppStore();
 
     // ── Always-on SSE connection ──────────────────────────────────────────────
@@ -79,11 +79,13 @@ export const AppLayout: React.FC = () => {
         if (sidebarTab === 'rag' && showRagInsights) return true;
         if (sidebarTab === 'mcp' && selectedMcpServer) return true;
         if (sidebarTab === 'news' && showNewsChatPanel) return true;
+        if (sidebarTab === 'echo' && currentRun) return true;
         return false;
-    }, [sidebarTab, selectedNodeId, selectedAppCardId, selectedExplorerNodeId, showRagInsights, selectedMcpServer, selectedLibraryComponent, showNewsChatPanel]);
+    }, [sidebarTab, selectedNodeId, selectedAppCardId, selectedExplorerNodeId, showRagInsights, selectedMcpServer, selectedLibraryComponent, showNewsChatPanel, currentRun]);
 
     // Scheduler and Console take up full width, no sidebar subpanel needed
-    const hideSidebarSubPanel = isInspectorOpen || sidebarTab === 'ide' || sidebarTab === 'scheduler' || sidebarTab === 'console' || sidebarTab === 'skills' || sidebarTab === 'studio' || !isSidebarSubPanelOpen;
+    // Echo should NOT be hidden when inspector is open, because the conversation is the primary surface.
+    const hideSidebarSubPanel = (isInspectorOpen && sidebarTab !== 'echo') || sidebarTab === 'ide' || sidebarTab === 'scheduler' || sidebarTab === 'console' || sidebarTab === 'skills' || sidebarTab === 'studio' || !isSidebarSubPanelOpen;
 
     const [leftWidth, setLeftWidth] = useState(400);
     const [rightWidth, setRightWidth] = useState(450); // original was 450px
@@ -244,6 +246,11 @@ export const AppLayout: React.FC = () => {
                                     <ForgeDashboard />
                                 ) : sidebarTab === 'console' ? (
                                     <MissionControl />
+                                ) : sidebarTab === 'echo' ? (
+                                    <>
+                                        <GraphCanvas />
+                                        <RunTimeline />
+                                    </>
                                 ) : sidebarTab === 'canvas' ? (
                                     <CanvasHost surfaceId="main-canvas" />
                                 ) : (

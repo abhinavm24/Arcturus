@@ -225,6 +225,9 @@ class Orchestrator:
             print("🎙️ [Orchestrator] Barge-in STT: keeping pre-filled frames alive")
 
         # Stop the in-flight Nexus run so it doesn't complete silently
+        active_run = self._active_run_id
+        if active_run:
+            self._publish("voice_nexus_run", {"active": False, "run_id": active_run, "reason": "barge_in"})
         self._stop_active_run_async()
 
         # Start a new voice session (if coming from IDLE, i.e. fresh wake)
@@ -342,9 +345,17 @@ class Orchestrator:
 
         saved_path = session.finish()
         doc = session.get_document()
+        
+        # Also save to Notes as requested
+        session.save_to_notes()
+        
+        try:
+            self._publish("voice_note_saved", {"session_id": session.session_id})
+        except Exception:
+            pass
 
         print(f"⏹️ [Orchestrator] Dictation STOPPED — {session.word_count} words.")
-        self._speak(f"Dictation stopped. {session.word_count} words saved.", source="dictation")
+        self._speak(f"Dictation stopped. {session.word_count} words saved in Notes.", source="dictation")
 
         return {
             "session_id": session.session_id,
@@ -705,12 +716,13 @@ class Orchestrator:
             if now - last_ping >= PROGRESS_PING_SEC:
                 ping = next(_ping_cycle)
                 print(f"📣 [Orchestrator] Progress ping: {ping}")
+                # We are about to speak a ping.
                 with self._lock:
-                    # silent=True: keep UI showing THINKING while we say the ping
                     self._set_state("SPEAKING", silent=True)
                 self.tts.speak(ping)
                 with self._lock:
                     if self.state == "SPEAKING":
+                        # Return to THINKING immediately after ping
                         self._set_state("THINKING")
                 last_ping = time.time()
                 if evt.is_set():
@@ -1056,13 +1068,17 @@ class Orchestrator:
         def _tts_consumer():
             """Consume stream_q via TTS.speak_streamed()."""
             try:
-                with self._lock:
-                    self._set_state("SPEAKING")
-                tts_started_event.set()  # Signal that we've entered SPEAKING state
+                # Do NOT set SPEAKING state yet. We wait until the first sentence is ready.
+                tts_started_event.set() 
                 print(f"🎙️ [Orchestrator] TTS consumer STARTED — calling speak_streamed()")
+                
                 # Pass a callback to publish sentences as they are spoken
                 def _on_sentence(text):
                     if text and text.strip():
+                        # We have actual text to speak! Transition to SPEAKING state now.
+                        with self._lock:
+                            if self.state == "THINKING":
+                                self._set_state("SPEAKING")
                         self._publish("voice_tts", {"text": text.strip(), "source": "answer"})
                 
                 self.tts.speak_streamed(stream_q, on_sentence_callback=_on_sentence)

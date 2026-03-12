@@ -89,7 +89,7 @@ async def lifespan(app: FastAPI):
         )
 
         stt_cfg = VOICE_CONFIG.get("stt", {})
-        stt_provider = VOICE_CONFIG.get("stt_provider", "whisper")
+        stt_provider = VOICE_CONFIG.get("stt_provider", "deepgram")
         sample_rate = stt_cfg.get("sample_rate", 16000)
         noise_reduce = stt_cfg.get("noise_reduce", True)
 
