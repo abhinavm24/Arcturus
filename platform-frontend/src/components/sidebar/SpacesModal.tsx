@@ -136,7 +136,7 @@ export const SpacesModal: React.FC<{
                         <DialogTitle className="text-foreground">Manage Spaces</DialogTitle>
                     </DialogHeader>
                     <p className="text-xs text-muted-foreground -mt-2">
-                        Select a space to filter runs and memories. Available from all panels.
+                        Select a space to filter runs, memories, RAG, and notes. Available from all panels.
                     </p>
                     <div className="space-y-2 max-h-[320px] overflow-y-auto py-2">
                         <button

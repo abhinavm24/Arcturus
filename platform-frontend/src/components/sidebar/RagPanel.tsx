@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { FileText, File, Folder, CheckCircle, AlertCircle, RefreshCw, ChevronRight, ChevronDown, FolderPlus, UploadCloud, Zap, Search, Library, FileSearch, Plus } from 'lucide-react';
+import { FileText, File, Folder, CheckCircle, AlertCircle, RefreshCw, ChevronRight, ChevronDown, FolderPlus, UploadCloud, Zap, Search, Library, FileSearch, Plus, FolderOpen } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import axios from 'axios';
 import { Button } from "@/components/ui/button";
@@ -186,6 +186,8 @@ export const RagPanel: React.FC = () => {
         expandedRagFolders,
         toggleRagFolder,
         currentSpaceId,
+        spaces,
+        setIsSpacesModalOpen,
     } = useAppStore();
 
     const [splitRatio, setSplitRatio] = useState(50);
@@ -424,7 +426,7 @@ export const RagPanel: React.FC = () => {
 
             {/* Header */}
             <div className="flex flex-col border-b border-border/50 bg-muted/20">
-                <div className="p-2 flex items-center gap-1.5 shrink-0">
+                <div className="p-2 flex items-center gap-1.5 shrink-0 flex-wrap">
                     {/* Search */}
                     <div className="relative flex-1 group">
                         <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground group-hover:text-foreground transition-colors" />
@@ -458,6 +460,15 @@ export const RagPanel: React.FC = () => {
                         </DropdownMenu>
 
                         <div className="w-px h-4 bg-border/50 mx-1" />
+
+                        <button
+                            onClick={() => setIsSpacesModalOpen(true)}
+                            className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1 shrink-0"
+                            title="Select Space"
+                        >
+                            <FolderOpen className="w-3 h-3" />
+                            Space: {currentSpaceId ? (spaces.find(s => s.space_id === currentSpaceId)?.name || 'Space') : 'Global'}
+                        </button>
 
                         {/* Mode Toggles */}
                         <Tooltip>

@@ -46,6 +46,7 @@ export const Header: React.FC = () => {
         fetchApps, fetchMemories, fetchRuns, fetchMcpServers,
         newsViewMode, setNewsViewMode, setNewsSearchQuery, setSearchResults,
         notesFiles, fetchNotesFiles, isNotesLoading,
+        currentSpaceId, spaces,
         gitSummary, fetchGitSummary,
         unreadCount, isInboxOpen, setIsInboxOpen,
         authStatus, authUserId, authUserFirstName, authUserEmail, isAuthModalOpen, setIsAuthModalOpen
@@ -312,14 +313,19 @@ export const Header: React.FC = () => {
 
                     <div className="h-6 w-px bg-border/50 mx-2" />
 
-                    {/* Spaces (Phase 4) — available from all panels */}
+                    {/* Spaces (Phase 4) — show current space when non-global */}
                     <button
                         onClick={() => setIsSpacesModalOpen(true)}
                         className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-muted/40 border border-border/50 hover:bg-muted/60 hover:border-primary/30 transition-colors no-drag"
                         title="Manage Spaces"
                     >
                         <FolderOpen className="w-3.5 h-3.5 text-muted-foreground" />
-                        <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Spaces</span>
+                        <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest max-w-[120px] truncate">
+                            Space:{' '}
+                            {currentSpaceId
+                                ? (spaces.find(s => s.space_id === currentSpaceId)?.name || 'Space')
+                                : 'Global'}
+                        </span>
                     </button>
 
                     <div className="h-6 w-px bg-border/50 mx-2" />
