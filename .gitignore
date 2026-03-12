@@ -44,6 +44,8 @@ Notes/
 # Logs & Runtime State
 memory/session_summaries_index/
 memory/debug_logs/
+memory/chronicle_checkpoints/
+memory/chronicle_events/
 !memory/*.py
 *.log
 server.log
