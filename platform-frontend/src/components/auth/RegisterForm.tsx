@@ -29,7 +29,7 @@ export const RegisterForm = ({ onSuccess }: { onSuccess: () => void }) => {
                 last_name: lastName
             };
 
-            if (mergeData && currentGuestId && currentGuestId.startsWith('guest_')) {
+            if (mergeData && currentGuestId) {
                 payload.guest_id = currentGuestId;
             }
 

@@ -355,11 +355,11 @@ async def create_space(request: CreateSpaceRequest, background_tasks: Background
     try:
         from memory.knowledge_graph import get_knowledge_graph
         from memory.user_id import get_user_id
-        
-        user_id = get_user_id()
-        
-        # Enforce Space Rules: Guests can only create local_only spaces
-        if user_id.startswith("guest_"):
+        from core.auth.context import get_is_guest
+
+        get_user_id()  # ensure identity present (middleware already enforced for protected routes)
+        # Enforce Space Rules: Guests can only create local_only spaces (design §7)
+        if get_is_guest():
             request.sync_policy = "local_only"
 
         kg = get_knowledge_graph()

@@ -110,13 +110,10 @@ def _neo4j_migration_tx(tx, guest_id: str, reg_id: str):
     )
     
     # 2. Re-wire edges from the Guest User node to the Registered User node
-    # This covers: HAS_MEMORY, HAS_FACT, and derived relationships (LIVES_IN, WORKS_AT, KNOWS, PREFERS)
-    
-    # A cleaner approach in Neo4j 5+ without APOC for Edge cloning:
-    # We just call apoc.refactor.mergeNodes if APOC is installed, but since we can't guarantee APOC:
+    # This covers: HAS_MEMORY, HAS_FACT, OWNS_SPACE, and derived relationships (LIVES_IN, WORKS_AT, KNOWS, PREFERS)
     
     # Let's do explicit edge rewiring for known schema edges.
-    edge_types = ["HAS_MEMORY", "HAS_FACT", "LIVES_IN", "WORKS_AT", "KNOWS", "PREFERS"]
+    edge_types = ["HAS_MEMORY", "HAS_FACT", "OWNS_SPACE", "LIVES_IN", "WORKS_AT", "KNOWS", "PREFERS"]
     for e_type in edge_types:
         tx.run(f"""
             MATCH (guest:User {{id: $guest_id}})-[r:{e_type}]->(target)

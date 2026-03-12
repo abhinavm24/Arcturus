@@ -17,10 +17,10 @@ export const LoginForm = ({ onSuccess }: { onSuccess: () => void }) => {
         setLoading(true);
         setError(null);
         try {
-            // Include guest ID for optional migration
+            // Include guest ID for optional migration (backend strips "guest_" prefix; send any guest identity)
             const currentGuestId = useAppStore.getState().authStatus === 'guest' ? useAppStore.getState().authUserId : null;
             const payload: any = { email, password };
-            if (currentGuestId && currentGuestId.startsWith('guest_')) {
+            if (currentGuestId) {
                 payload.guest_id = currentGuestId;
             }
 
