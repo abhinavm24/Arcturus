@@ -450,7 +450,9 @@ Use this section as the single list of what to do next; update as you complete i
 
 2. **Lifecycle (core Phase 5)** — Importance scoring, archival, contradiction resolution. CONTRADICTS relationship reserved in schema. Implement `memory/lifecycle.py` and wire into retrieval/ingestion.
 
-3. **Other** — Expansion depth (multi-hop), Phase 3 retrieval scoping by space, graph explorer, spaces manager — per delivery README.
+3. **Profile facts across spaces** — Ensure a small, curated set of global profile facts (e.g. identity/preferences) is always available to agents regardless of active space, while memories/entities remain space-scoped. Implement as a retrieval-layer behavior (adapter/query) without changing `user_id` as the primary tenant key.
+
+4. **Other** — Expansion depth (multi-hop), Phase 3 retrieval scoping by space, graph explorer, spaces manager — per delivery README.
 
 **Deferred to post–Phase 5:**
 
