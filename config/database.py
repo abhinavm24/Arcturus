@@ -16,16 +16,16 @@ DATABASE_URL = f"sqlite:///{SQLITE_DB_PATH}"
 engine = create_engine(DATABASE_URL, echo=False, connect_args={"check_same_thread": False})
 
 def init_db():
-    \"\"\"Initialize the database. Creates all tables registered with SQLModel.\"\"\"
+    """Initialize the database. Creates all tables registered with SQLModel."""
     SQLModel.metadata.create_all(engine)
 
 def get_session() -> Generator[Session, None, None]:
-    \"\"\"FastAPI dependency for database sessions.\"\"\"
+    """FastAPI dependency for database sessions."""
     with Session(engine) as session:
         yield session
 
 @contextmanager
 def get_session_context() -> Generator[Session, None, None]:
-    \"\"\"Context manager for database sessions when outside of FastAPI requests.\"\"\"
+    """Context manager for database sessions when outside of FastAPI requests."""
     with Session(engine) as session:
         yield session
