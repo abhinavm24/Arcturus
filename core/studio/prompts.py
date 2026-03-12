@@ -73,12 +73,12 @@ def _get_type_specific_outline_guidance(artifact_type: ArtifactType) -> str:
     """Return type-specific guidance for outline generation."""
     if artifact_type == ArtifactType.slides:
         return """Guidance for slides:
-- Plan a narrative arc: opening hook, problem statement, solution overview, evidence/data, call to action
-- Each outline item represents one slide
-- Suggest 8-12 slides unless the user specifies a count
+- Plan a narrative arc: problem statement, solution overview, evidence/data, call to action
+- Each outline item represents one CONTENT slide
+- The slide count refers to content slides only — an opening title slide, closing title slide, and section dividers are generated automatically. Do NOT include them in the outline.
+- Suggest 8-12 content slides unless the user specifies a count
 - Include speaker notes suggestions in descriptions — these become presenter notes in the exported PPTX
-- Consider slide types and pick the best fit for each slide's content:
-  * title — Opening/closing slides with large centered text
+- Available content slide types (pick the best fit for each slide):
   * content — Standard slide with title + body paragraphs or bullet points
   * two_column — Side-by-side comparison or complementary content
   * comparison — Explicit pros/cons or before/after layout
@@ -90,14 +90,11 @@ def _get_type_specific_outline_guidance(artifact_type: ArtifactType) -> str:
   * quote — Featured quotation with attribution
   * code — Technical slide with monospace code block
   * team — Team members, credits, or acknowledgments
-  * section_divider — Section break slide with large section number and title (use between major topic shifts)
-  * agenda — Table of contents / overview with numbered cards (use as slide 2 after title)
+  * agenda — Table of contents / overview with numbered cards (use as first content slide for decks with 8+ slides)
   * table — Data table with styled header row, alternating bands, and optional status badges
+- Do NOT use "title" or "section_divider" as slide_type — these are structural and added automatically
 - When the topic involves data, metrics, or KPIs, prefer stat or chart slide types
-- For decks with 10+ slides, insert 1-2 section_divider slides to break the deck into logical sections
-- Include an agenda slide as slide 2 (after title) for decks with 8+ slides
 - Use table slide type when comparing platforms, tools, or features across dimensions
-- Number content titles with section prefix (e.g., "1.1 Title - Subtitle") to group under section dividers
 - Bullet points should be SHORT phrases (6-8 words max), not full sentences
 - Assign a slide_type to each item in the description field (e.g., "slide_type: two_column")"""
 
@@ -325,6 +322,16 @@ def get_draft_prompt_with_sequence(
         sequence_hint = "\n\nPlanned slide sequence — You MUST use the exact slide_type specified for each position. Do NOT substitute content or image_text for the assigned type:\n"
         for i, s in enumerate(slide_sequence, 1):
             sequence_hint += f"  Slide {i}: slide_type={s['slide_type']} (MANDATORY), position={s['position']}\n"
+
+        # Count content vs structural for mapping guidance
+        content_count = sum(1 for s in slide_sequence if s["position"] == "body" and s["slide_type"] not in ("title", "section_divider"))
+        outline_count = len(outline.items) if hasattr(outline, "items") else content_count
+        sequence_hint += (
+            f"\nThe outline contains {outline_count} content items. "
+            f"These map 1:1 to the {content_count} body-position content slides above. "
+            "Opening, closing, and section_divider slides are structural — generate "
+            "appropriate content for them based on the deck's topic, not from specific outline items.\n"
+        )
         base_prompt += sequence_hint
 
     return base_prompt
