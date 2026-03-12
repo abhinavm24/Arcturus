@@ -3,7 +3,7 @@ import asyncio
 import json
 from pathlib import Path
 from datetime import datetime
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Path
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Path as PathParam
 from pydantic import BaseModel
 import requests
 import pdb
@@ -276,7 +276,7 @@ async def get_memories(space_id: str | None = Query(None, description="Filter me
 
 @router.get("/memories/{memory_id}/lifecycle")
 async def get_memory_lifecycle(
-    memory_id: str = Path(..., description="Memory id to inspect lifecycle state"),
+    memory_id: str = PathParam(..., description="Memory id to inspect lifecycle state"),
 ):
     """
     Inspect lifecycle-related fields for a single memory.
@@ -303,7 +303,7 @@ async def get_memory_lifecycle(
 
 @router.patch("/memories/{memory_id}/lifecycle")
 async def override_memory_lifecycle(
-    memory_id: str = Path(..., description="Memory id to override lifecycle state"),
+    memory_id: str = PathParam(..., description="Memory id to override lifecycle state"),
     body: LifecycleOverrideRequest | None = None,
 ):
     """
