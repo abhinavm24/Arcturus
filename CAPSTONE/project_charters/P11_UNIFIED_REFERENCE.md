@@ -33,9 +33,10 @@ Update **§2 Status at a glance** and **§8 Remaining / next steps** as work pro
 | **Session-level extraction** | ⏳ Deferred | One pass for memories + preferences + entities from session; see §8.2 |
 | **Retrieval scoping by space** | ⏳ Future | List/filter done; full retrieval scoping deferred; see §8.4 |
 | **Phase 4: Sync Engine** | ✅ Core done | CRDT-based sync (LWW), push/pull API, selective sync; see §8.5 |
-| **Shared Space (new step)** | ✅ Implemented | sync_policy "shared"; space templates (Computer Only, Personal, Workspace, Custom); share by user_id; no global injection when run in a space; see §8.8a |
+| **Shared Space (new step)** | ✅ Implemented | sync_policy "shared"; space templates (Computer Only, Personal, Workspace, Custom, More Templates… e.g. Startup Research, Home Renovation); shared spaces (share by user_id, SHARED_WITH); no global injection when run in a space; see §8.8a |
+| **Login / register (Phase 5 first)** | ✅ Done | Register, login, guest vs logged-in; migration API; auth token with requests; see §8.8 |
 | **Phase 5: Lifecycle Manager** | ⏳ Deferred | Importance, archival, contradiction resolution; user_id FE; see §8.8 |
-| **UI edit (frontend + backend)** | ⏳ Deferred | Backend ready; frontend deferred to Phase 5 |
+| **UI edit (frontend + backend)** | ⏳ Deferred (post Phase 5) | Backend ready; frontend deferred to after Phase 5; see §8.9 |
 | **Entity-friendly Qdrant payload** | ⏳ Optional | §8.1 — beyond `entity_ids` + optional `entity_labels` |
 | **Expansion depth** | ⏳ Future | One-hop only; `depth` parameter reserved for multi-hop |
 | **user_id: FE ownership** | ⏳ Phase 5 | Move user_id to frontend for server deployment; see §8.7 |
@@ -57,7 +58,7 @@ Update **§2 Status at a glance** and **§8 Remaining / next steps** as work pro
 - **Phase 2.5:** Unified extractor with registry-owned fact identity (field_id). **Done.**
 - **Phase 3:** Spaces & Collections (Perplexity-style project hubs). **Done.** Create/list/select spaces; runs and memories filtered by space. Retrieval scoping by space deferred. Session-level extraction deferred.
 - **Phase 4:** **Sync Engine** — Cross-device sync (CRDT-based), conflict resolution, selective sync. **Deferred.**
-- **Phase 5:** **Lifecycle Manager** — Smart memory management: importance scoring, decay & archival, contradiction resolution, privacy controls; plus UI edit frontend and user_id FE ownership. **Deferred** (backend for UI edit done).
+- **Phase 5:** **Lifecycle Manager** — Smart memory management: importance scoring, decay & archival, contradiction resolution, privacy controls; user_id FE ownership. **Deferred.** UI edit frontend is deferred to post–Phase 5 (backend done).
 
 **Current systems (pre-Mnemo):**
 
@@ -126,7 +127,7 @@ Update **§2 Status at a glance** and **§8 Remaining / next steps** as work pro
 
 ### 4.3 Deferred (from delivery README)
 
-- Session-level extraction (§8.2), full retrieval scoping by space (§8.4), **Phase 4 Sync Engine**, **Phase 5 Lifecycle Manager**, frontend (graph explorer, spaces manager, UI edit), performance tuning (e.g. retrieval P95 < 250ms benchmark).
+- Session-level extraction (§8.2), full retrieval scoping by space (§8.4), **Phase 4 Sync Engine**, **Phase 5 Lifecycle Manager**, frontend (graph explorer, spaces manager), performance tuning (e.g. retrieval P95 < 250ms benchmark). **UI edit frontend** deferred to post–Phase 5 (§8.9).
 
 ---
 
@@ -311,7 +312,7 @@ Query
 - **memory/space_constants.py:** `SPACE_ID_GLOBAL = "__global__"` for global memories/facts.
 - **routers/remme.py:** `POST /remme/spaces`, `GET /remme/spaces`, `GET /remme/memories?space_id=`, `POST /remme/add` with `space_id`; create_memory passes space_id.
 - **routers/runs.py:** `POST /runs` with `space_id`; `list_runs` enriches with `space_id` via `get_space_for_session`; `get_or_create_session(run_id, space_id)` at run start.
-- **platform-frontend:** SpacesPanel, getSpaces/createSpace/addMemory(space_id)/getMemories(space_id)/createRun(space_id); SpacesSlice; runs filtered by currentSpaceId. **Shared Space:** space_constants SYNC_POLICY_SHARED; sync/policy treats shared as syncable; memory_retriever does not inject global when space_id is set; space templates (Computer Only, Personal, Workspace, Custom) with guest gray-out; share_space_with, get_all_spaces_for_user, can_user_access_space; POST /remme/spaces/{id}/share; frontend template-based create and shareSpace API.
+- **platform-frontend:** SpacesPanel, getSpaces/createSpace/addMemory(space_id)/getMemories(space_id)/createRun(space_id); SpacesSlice; runs filtered by currentSpaceId. **Shared Space & templates:** space_constants SYNC_POLICY_SHARED; sync/policy treats shared as syncable; memory_retriever does not inject global when space_id is set; space templates (Computer Only, Personal, Workspace, Custom, **More Templates…** — Startup Research, Home Renovation, Book Writing, Travel Planning, Learning, Job Search) with guest gray-out; shared spaces: share_space_with, get_all_spaces_for_user, can_user_access_space; POST /remme/spaces/{id}/share; frontend template-based create and shareSpace API.
 
 ---
 
@@ -331,7 +332,7 @@ Use this section as the single list of what to do next; update as you complete i
 
 **Step 6 (Spaces):** Done (Phase 3). Spaces & Collections UI, create/list/select spaces; runs and memories filtered by space; Fact uses `SPACE_ID_GLOBAL` for global scope. Full retrieval scoping by space deferred; see §8.4.
 
-**Step 7 (UI edit pipeline):** Backend done. `knowledge_graph.upsert_fact_from_ui()`, `PUT /remme/preferences/facts` with `UpdateFactRequest` (namespace, key, value_type, value/...). **Frontend deferred** (moved to Phase 5 / deferred list).
+**Step 7 (UI edit pipeline):** Backend done. `knowledge_graph.upsert_fact_from_ui()`, `PUT /remme/preferences/facts` with `UpdateFactRequest` (namespace, key, value_type, value/...). **Frontend deferred to post–Phase 5**; see §8.9.
 
 ### 8.8a Shared Space (new step — before Lifecycle Manager)
 
@@ -341,19 +342,13 @@ Use this section as the single list of what to do next; update as you complete i
 
 1. **sync_policy "shared"** — New policy in addition to `sync` and `local_only`. Shared spaces sync to cloud so they can be shared with other users. `memory/space_constants.py`: `SYNC_POLICY_SHARED = "shared"`. Sync engine: treat "shared" as synced (like "sync").
 
-2. **Pre-configured space templates** (displayed on Space panel when user goes to create/choose a space):
-   - **Computer Only** (Guest + Logged-in): `sync_policy=local_only`. Brief description: e.g. "Stays on this device only; not synced."
-   - **Personal** (Logged-in only; Guest: grayed out, "Log in to use"): `sync_policy=sync`. Description: e.g. "Syncs across your devices; private."
-   - **Workspace** (Logged-in only; Guest: grayed out): `sync_policy=shared`. Description: e.g. "Syncs and can be shared with others."
-   - **Custom** (Logged-in only; Guest: grayed out): User chooses sync_policy. Description: e.g. "Choose sync behavior yourself."
+2. **Pre-configured space templates** (displayed on Space panel and Spaces modal when creating a space) — **Done.** Main templates: **Computer Only** (Guest + Logged-in, `local_only`), **Personal** (Logged-in only, guest grayed out "Log in to use", `sync`), **Workspace** (Logged-in only, `shared`), **Custom** (Logged-in only, user picks sync_policy). **More Templates…** (Logged-in only): opens a second list of sample templates that pre-fill name and description: Startup Research, Home Renovation, Book Writing, Travel Planning, Learning, Job Search. When creating from any template, user sets **name** and optional **brief description** (pre-filled for More Templates).
 
-   When creating a new space from a template, user can set a **name** and optional **brief description** for the space.
-
-3. **Shared space** — A space with `sync_policy=shared` can be shared with other users by **email or username**. Shared users can see the space's content and contribute (add memories, run in that space). Backend: Neo4j relationship (Space)-[:SHARED_WITH]->(User); API to share space with list of user_ids (and optionally resolve email/username to user_id when auth supports it). List spaces API returns both owned and shared-with-me spaces.
+3. **Shared spaces** — **Done.** A space with `sync_policy=shared` (or any space owned by the user) can be shared with other users by **user_id**. Backend: Neo4j (Space)-[:SHARED_WITH]->(User); `share_space_with`, `get_spaces_shared_with_user`, `can_user_access_space`; `POST /remme/spaces/{space_id}/share` with `{ user_ids: [] }`. List spaces returns owned + shared-with-me (`get_all_spaces_for_user`). Shared users can see and contribute (add memories, run in that space). Access checked on add memory and create run. Email/username resolution can be added when auth supports it.
 
 4. **Memory retriever and run: no global injection when in a space** — When a run has a non-global `space_id`, memory context must **not** include global-space memories or entities; only memories/entities in that space are injected. When `space_id` is `__global__` or absent, behavior unchanged (global-only or unscoped as today). Implemented in `memory_retriever.retrieve()`: when `space_id` is set and ≠ `SPACE_ID_GLOBAL`, filter to that space only (exclude `__global__` from Qdrant and Neo4j filters).
 
-**Order:** Implement Shared Space step before starting Phase 5 Lifecycle Manager. UI-edit steps remain deferred.
+**Order:** Implement Shared Space step before starting Phase 5 Lifecycle Manager. UI edit (frontend) is deferred to post–Phase 5.
 
 ### 8.1 Optional: Entity-friendly payload in Qdrant
 
@@ -443,23 +438,34 @@ Use this section as the single list of what to do next; update as you complete i
 
 **Shared Space (Step 8.8a)** is implemented before Phase 5; see §8.8a.
 
+**Already done (before Phase 5):**
+
+- **Login / register** — Register and login experience in place. Guest: generated `user_id` (frontend or backend); Register: associate guest id to new account or create new user_id; Login: use backend user_id, migrate sessions/memories from cached id to logged-in user_id. Backend: user store, login/register endpoints, migration API. Frontend: login/register UI, guest vs logged-in state, auth token (and user_id) with requests. Sync can bind to authenticated user_id.
+
+- **Shared Space and templates** — sync_policy `shared`; space templates (Computer Only, Personal, Workspace, Custom, **More Templates…** with sample templates: Startup Research, Home Renovation, Book Writing, Travel Planning, Learning, Job Search); shared spaces via user_id (SHARED_WITH, share API, list includes shared); memory/run context excludes global when in a space. See §8.8a.
+
 **Phase 5 items** (to implement when starting Phase 5):
 
-1. **Optional login / register (first)** — Full register and login experience before other Phase 5 work. **Guest:** When user is not logged in, use a generated `user_id` (ideally from frontend for future shared-backend deployment; otherwise backend-generated and cached). **Register:** On first-time registration, if the user already has a cached guest id from prior sessions, associate that id to the new account; otherwise create and associate a new user_id. **Login:** On successful login, use the user_id from the backend (DB) for that account. If the client had a different id cached (e.g. from another device or guest), migrate all associated sessions and memories from the cached id to the logged-in user_id so nothing is lost. Backend: user store, login/register endpoints, migration API (reassign memories/sessions from old user_id to new). Frontend: login/register UI, guest vs logged-in state, send user_id (or auth token that implies user_id) with requests. **Sync:** Once identity exists, Phase 4 sync endpoints can require auth (login token) and bind sync to the authenticated user_id instead of a separate optional sync secret.
+1. **user_id FE ownership** — See §8.7. Move user_id generation/caching to frontend for server deployment; backend accepts client-provided user_id only. (May be partly addressed by login/register already done.)
 
-2. **UI edit (frontend)** — Build UI to edit preferences/facts. Backend ready: `PUT /remme/preferences/facts`, `UpdateFactRequest` (namespace, key, value_type, value). Adapter returns hub shape from Neo4j. UI must present canonical fields (from registry) for editing; display GET /preferences response.
+2. **Lifecycle (core Phase 5)** — Importance scoring, archival, contradiction resolution. CONTRADICTS relationship reserved in schema. Implement `memory/lifecycle.py` and wire into retrieval/ingestion.
 
-3. **UI edit flow (from design doc)** — On user edit: (1) upsert Fact with `source_mode=ui_edit`, `confidence=1.0`, `last_confirmed_at`; (2) create Evidence with `source_type=ui_edit`; (3) re-run derivation for User–Entity edges if edited fact implies entity relationship. Backend implements this; frontend calls the API.
+3. **Other** — Expansion depth (multi-hop), Phase 3 retrieval scoping by space, graph explorer, spaces manager — per delivery README.
 
-4. **user_id FE ownership** — See §8.7. (May be partly or fully addressed by item 1.)
+**Deferred to post–Phase 5:**
 
-5. **Lifecycle (core Phase 5)** — Importance scoring, archival, contradiction resolution. CONTRADICTS relationship reserved in schema. Implement `memory/lifecycle.py` and wire into retrieval/ingestion.
-
-6. **Other** — Expansion depth (multi-hop), Phase 3 retrieval scoping by space, graph explorer, spaces manager — per delivery README.
+- **UI edit (frontend)** — Build UI to edit preferences/facts. Backend ready: `PUT /remme/preferences/facts`, `UpdateFactRequest`. Adapter returns hub shape from Neo4j. UI must present canonical fields (from registry); display GET /preferences response.
+- **UI edit flow** — On user edit: upsert Fact, create Evidence, re-run derivation. Backend implements this; frontend calls the API. See Step 7.
 
 ### 8.9 Future Phase (post–Phase 5) — Spaces and beyond
 
-Items deferred from Phase 3 Spaces; to consider in future phases:
+Items deferred from Phase 3 Spaces or from Phase 5; to consider after Phase 5.
+
+**UI edit (deferred from Phase 5):**
+
+0. **UI edit (frontend) and UI edit flow** — Backend ready (`PUT /remme/preferences/facts`, `UpdateFactRequest`; Step 7). Build frontend to edit preferences/facts: display GET /preferences (hub shape), present canonical fields from registry, call API; backend handles upsert Fact, Evidence, derivation.
+
+**Spaces and beyond:**
 
 1. **Per-space model choice and custom instructions** — Like Perplexity: allow users to override the default model and set custom system instructions per Space, so the assistant behaves differently inside each Space.
 
