@@ -2,7 +2,7 @@
 import json
 import re
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form, Query
 from fastapi.responses import FileResponse, StreamingResponse
 import hashlib
 from PIL import Image
@@ -20,9 +20,21 @@ multi_mcp = get_multi_mcp()
 
 # === Document Management Endpoints ===
 
+def _filter_tree_by_space(items: list, space_id: str | None) -> list:
+    """Filter top-level tree by space. Convention: __global__ and {space_id} folders."""
+    if not space_id or space_id == "__global__":
+        global_folder = next((x for x in items if x.get("name") == "__global__" and x.get("type") == "folder"), None)
+        if global_folder:
+            return [global_folder]
+        return items  # backward compat: no __global__, show all
+    else:
+        space_folder = next((x for x in items if x.get("name") == space_id and x.get("type") == "folder"), None)
+        return [space_folder] if space_folder else []
+
+
 @router.get("/documents")
-async def get_rag_documents():
-    """List documents in a recursive tree structure with RAG status"""
+async def get_rag_documents(space_id: str | None = Query(None, description="Filter by space; __global__ or space uuid")):
+    """List documents in a recursive tree structure with RAG status. Phase B: optional space_id filters by folder convention (__global__ or {space_id})."""
     try:
         doc_path = PROJECT_ROOT / "data"
         index_dir = PROJECT_ROOT / "mcp_servers" / "faiss_index"
@@ -91,6 +103,15 @@ async def get_rag_documents():
             return items
 
         files = build_tree(doc_path) if doc_path.exists() else []
+        if space_id is not None:
+            filtered = _filter_tree_by_space(files, space_id)
+            if filtered:
+                files = filtered
+            else:
+                # Notes convention: data/Notes/__global__/ and data/Notes/{space_id}/
+                for item in files:
+                    if item.get("name") == "Notes" and item.get("type") == "folder" and item.get("children"):
+                        item["children"] = _filter_tree_by_space(item["children"], space_id) or []
         return {"files": files}
     except Exception as e:
         import traceback

@@ -319,7 +319,7 @@ export const RagPanel: React.FC = () => {
 
     useEffect(() => {
         fetchFiles();
-    }, []);
+    }, [currentSpaceId, fetchFiles]);
 
     const handleCreateFolder = async () => {
         if (!newFolderName.trim()) return;

@@ -1481,7 +1481,9 @@ export const useAppStore = create<AppState>()(
             fetchRagFiles: async () => {
                 set({ isRagLoading: true });
                 try {
-                    const res = await api.get(`${API_BASE}/rag/documents`);
+                    const spaceId = get().currentSpaceId;
+                    const params = spaceId ? { space_id: spaceId } : {};
+                    const res = await api.get(`${API_BASE}/rag/documents`, { params });
                     set({ ragFiles: res.data.files });
                 } catch (e) {
                     console.error("Failed to fetch RAG docs", e);
@@ -1534,9 +1536,11 @@ export const useAppStore = create<AppState>()(
             fetchNotesFiles: async () => {
                 set({ isNotesLoading: true });
                 try {
-                    const res = await api.get(`${API_BASE}/rag/documents`);
+                    const spaceId = get().currentSpaceId;
+                    const params = spaceId ? { space_id: spaceId } : {};
+                    const res = await api.get(`${API_BASE}/rag/documents`, { params });
                     const allFiles = res.data.files as any[];
-                    const notesRoot = allFiles.find(f => f.name === 'Notes' && f.type === 'folder');
+                    const notesRoot = allFiles.find((f: any) => f.name === 'Notes' && f.type === 'folder');
                     if (notesRoot && notesRoot.children) {
                         set({ notesFiles: notesRoot.children });
                     } else {

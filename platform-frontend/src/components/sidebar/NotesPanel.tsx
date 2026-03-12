@@ -247,7 +247,7 @@ export const NotesPanel: React.FC = () => {
 
     useEffect(() => {
         fetchNotesFiles();
-    }, []);
+    }, [currentSpaceId, fetchNotesFiles]);
 
     const handleCreateFolder = async () => {
         if (!newFolderName.trim()) return;
