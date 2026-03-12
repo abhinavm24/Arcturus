@@ -3,7 +3,7 @@ import asyncio
 import json
 from pathlib import Path
 from datetime import datetime
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Path
 from pydantic import BaseModel
 import requests
 import pdb
@@ -49,6 +49,13 @@ class UpdateFactRequest(BaseModel):
     value_json: list | dict | None = None
     entity_ref: str | None = None
     space_id: str | None = None
+
+
+class LifecycleOverrideRequest(BaseModel):
+    """Request body for overriding lifecycle fields on a memory."""
+    importance: float | None = None
+    archived: bool | None = None
+    access_count: int | None = None
 
 
 # === Background Tasks ===
@@ -261,6 +268,76 @@ async def get_memories(space_id: str | None = Query(None, description="Filter me
             m["source_exists"] = exists
             
         return {"status": "success", "memories": memories}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/memories/{memory_id}/lifecycle")
+async def get_memory_lifecycle(
+    memory_id: str = Path(..., description="Memory id to inspect lifecycle state"),
+):
+    """
+    Inspect lifecycle-related fields for a single memory.
+    Returns a thin view (id + lifecycle fields) for debugging Phase 5 behavior.
+    """
+    try:
+        m = remme_store.get(memory_id)
+        if not m:
+            raise HTTPException(status_code=404, detail="Memory not found")
+        lifecycle = {
+            "id": m.get("id") or memory_id,
+            "importance": m.get("importance"),
+            "archived": m.get("archived"),
+            "access_count": m.get("access_count"),
+            "last_accessed_at": m.get("last_accessed_at"),
+            "created_at": m.get("created_at"),
+        }
+        return {"status": "success", "lifecycle": lifecycle}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/memories/{memory_id}/lifecycle")
+async def override_memory_lifecycle(
+    memory_id: str = Path(..., description="Memory id to override lifecycle state"),
+    body: LifecycleOverrideRequest | None = None,
+):
+    """
+    Override lifecycle-related fields for a single memory (admin/debug only).
+    Allows manual tweaks to `importance`, `archived`, and `access_count`.
+    """
+    if body is None:
+        body = LifecycleOverrideRequest()
+    try:
+        m = remme_store.get(memory_id)
+        if not m:
+            raise HTTPException(status_code=404, detail="Memory not found")
+        updates: dict = {}
+        if body.importance is not None:
+            updates["importance"] = float(body.importance)
+        if body.archived is not None:
+            updates["archived"] = bool(body.archived)
+        if body.access_count is not None:
+            updates["access_count"] = int(body.access_count)
+        if not updates:
+            return {"status": "noop", "message": "No lifecycle fields provided"}
+        ok = remme_store.update(memory_id, metadata=updates)
+        if not ok:
+            raise HTTPException(status_code=500, detail="Failed to update lifecycle fields")
+        m_after = remme_store.get(memory_id) or {}
+        lifecycle = {
+            "id": m_after.get("id") or memory_id,
+            "importance": m_after.get("importance"),
+            "archived": m_after.get("archived"),
+            "access_count": m_after.get("access_count"),
+            "last_accessed_at": m_after.get("last_accessed_at"),
+            "created_at": m_after.get("created_at"),
+        }
+        return {"status": "success", "lifecycle": lifecycle}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -843,6 +843,11 @@ class KnowledgeGraph:
             """ if use_space else ""),
             params,
         )
+        # Phase 5: update CONTRADICTS relationships between Facts that disagree on value
+        try:
+            self._update_fact_contradictions(uid, namespace, key)
+        except Exception as e:
+            log_error(f"KnowledgeGraph: failed to update fact contradictions for {namespace}.{key}: {e}")
         if entity_ref:
             # Resolve entity_ref (composite_key "Type::name" or entity id) and create Fact-REFERS_TO-Entity
             eid = self._resolve_entity_ref_for_fact(entity_ref, uid)
@@ -855,6 +860,42 @@ class KnowledgeGraph:
                     {"user_id": uid, "namespace": namespace, "key": key, "entity_id": eid},
                 )
         return fact_id
+
+    def _update_fact_contradictions(self, user_id: str, namespace: str, key: str) -> None:
+        """
+        Phase 5: Detect conflicting Facts for the same (user, namespace, key) across spaces and
+        link them with CONTRADICTS relationships.
+
+        We consider two Facts contradictory when:
+        - They share user_id, namespace, key.
+        - They have the same value_type.
+        - Their concrete value fields differ.
+
+        This is conservative and only compares simple value equality; more nuanced
+        semantic contradiction remains future work.
+        """
+        if not self._enabled or not user_id or not namespace or not key:
+            return
+        self._run_write(
+            """
+            MATCH (f:Fact {user_id: $user_id, namespace: $namespace, key: $key})
+            WITH collect(f) AS facts
+            UNWIND facts AS a
+            UNWIND facts AS b
+            WITH a, b
+            WHERE id(a) < id(b)
+              AND a.value_type = b.value_type
+              AND (
+                (a.value_type = 'bool'   AND a.value_bool   IS NOT NULL AND b.value_bool   IS NOT NULL AND a.value_bool   <> b.value_bool) OR
+                (a.value_type = 'number' AND a.value_number IS NOT NULL AND b.value_number IS NOT NULL AND a.value_number <> b.value_number) OR
+                (a.value_type = 'text'   AND a.value_text   IS NOT NULL AND b.value_text   IS NOT NULL AND a.value_text   <> b.value_text) OR
+                (a.value_type = 'json'   AND a.value_json   IS NOT NULL AND b.value_json   IS NOT NULL AND a.value_json   <> b.value_json)
+              )
+            MERGE (a)-[:CONTRADICTS]->(b)
+            MERGE (b)-[:CONTRADICTS]->(a)
+            """,
+            {"user_id": user_id, "namespace": namespace, "key": key},
+        )
 
     def _resolve_entity_ref_for_fact(self, entity_ref: str, user_id: str) -> Optional[str]:
         """Resolve entity_ref (composite_key 'Type::name' or entity id) to entity id. Create entity if composite key."""
