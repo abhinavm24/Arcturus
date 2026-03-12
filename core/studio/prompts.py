@@ -417,6 +417,7 @@ Operation types:
 Rules:
 - Path is relative to the resolved target (e.g., if target is slide 3, path "title" means slide 3's title)
 - Use only existing target ids/indices from the target map
+- IMPORTANT: "title", "speaker_notes", "deck_title", "subtitle", "heading" are plain strings. Never set them to objects/dicts — use a simple string value.
 - Return ONLY the JSON object, no markdown fences or explanations"""
 
 
@@ -445,4 +446,5 @@ Please fix the patch and return ONLY valid JSON matching the Patch schema:
 Rules:
 - Fix the error identified above
 - Use only valid target kinds and existing ids from the target map
+- IMPORTANT: "title", "speaker_notes", "deck_title", "subtitle", "heading" are plain strings. Never set them to objects/dicts — use a simple string value.
 - Return ONLY the JSON object, no markdown fences or explanations"""
