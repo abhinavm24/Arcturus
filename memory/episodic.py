@@ -1,88 +1,71 @@
-"""Episodic memory module: stores and retrieves session skeleton recipes."""
+"""Episodic memory module: stores and retrieves session skeleton recipes.
+
+Phase B: Reads from Qdrant (arcturus_episodic). Local episodic_skeletons/ is used
+only by migration script. If Qdrant is unavailable, returns [].
+"""
 
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from shared.state import PROJECT_ROOT
 
-# Directory where skeleton files are stored
+# Directory for legacy migration only (not read at runtime)
 MEMORY_DIR = PROJECT_ROOT / "memory" / "episodic_skeletons"
 MEMORY_DIR.mkdir(parents=True, exist_ok=True)
 
+_episodic_store = None
 
-def _load_skeleton(file_path: Path) -> dict[str, Any]:
-    """Load a skeleton JSON file."""
+
+def _get_episodic_store():
+    """Lazy init episodic Qdrant store."""
+    global _episodic_store
+    if _episodic_store is None:
+        try:
+            from memory.backends.episodic_qdrant_store import EpisodicQdrantStore
+            _episodic_store = EpisodicQdrantStore()
+        except Exception as e:
+            from core.utils import log_error
+            log_error(f"Episodic Qdrant store init failed: {e}")
+            return None
+    return _episodic_store
+
+
+def search_episodes(
+    query: str,
+    limit: int = 5,
+    user_id: Optional[str] = None,
+    space_id: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """Search relevant past episodes by semantic similarity. Phase B: Qdrant with user/space filters."""
+    store = _get_episodic_store()
+    if not store:
+        return []
     try:
-        return json.loads(file_path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-
-
-def _calculate_relevance_score(skeleton: dict[str, Any], query: str) -> float:
-    """Compute keyword relevance score for an episode skeleton."""
-    query_words = set(re.findall(r"\w+", query.lower()))
-    if not query_words:
-        return 0.0
-
-    score = 0.0
-
-    original_query = str(skeleton.get("original_query", "")).lower()
-    if original_query:
-        original_words = set(re.findall(r"\w+", original_query))
-        score += len(query_words & original_words) * 3.0
-
-    for node in skeleton.get("nodes", []):
-        task_goal = str(node.get("task_goal", "")).lower()
-        if task_goal:
-            task_words = set(re.findall(r"\w+", task_goal))
-            score += len(query_words & task_words) * 2.0
-
-        instruction = str(node.get("instruction", "")).lower()
-        if instruction:
-            inst_words = set(re.findall(r"\w+", instruction))
-            score += len(query_words & inst_words)
-
-    return score / len(query_words)
-
-
-def search_episodes(query: str, limit: int = 5) -> list[dict[str, Any]]:
-    """Search relevant past episodes by query similarity."""
-    if not MEMORY_DIR.exists():
+        from remme.utils import get_embedding
+        emb = get_embedding(query, task_type="search_query")
+        results = store.search(emb, limit=limit, user_id=user_id, space_id=space_id)
+        return results
+    except Exception as e:
+        from core.utils import log_error
+        log_error(f"search_episodes failed: {e}")
         return []
 
-    scored_episodes: list[tuple[float, dict[str, Any]]] = []
-    for file_path in MEMORY_DIR.glob("skeleton_*.json"):
-        skeleton = _load_skeleton(file_path)
-        if not skeleton:
-            continue
 
-        score = _calculate_relevance_score(skeleton, query)
-        if score > 0:
-            scored_episodes.append((score, skeleton))
-
-    scored_episodes.sort(key=lambda x: x[0], reverse=True)
-    return [episode for _, episode in scored_episodes[:limit]]
-
-
-def get_recent_episodes(limit: int = 10) -> list[dict[str, Any]]:
-    """Return most recently modified episode skeletons."""
-    if not MEMORY_DIR.exists():
+def get_recent_episodes(
+    limit: int = 10,
+    user_id: Optional[str] = None,
+    space_id: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """Return most recent episodes. Phase B: Qdrant with user/space filters."""
+    store = _get_episodic_store()
+    if not store:
         return []
-
-    skeleton_files = sorted(
-        MEMORY_DIR.glob("skeleton_*.json"),
-        key=lambda f: f.stat().st_mtime,
-        reverse=True,
-    )
-
-    episodes: list[dict[str, Any]] = []
-    for file_path in skeleton_files[:limit]:
-        skeleton = _load_skeleton(file_path)
-        if skeleton:
-            episodes.append(skeleton)
-
-    return episodes
+    try:
+        return store.get_recent(limit=limit, user_id=user_id, space_id=space_id)
+    except Exception as e:
+        from core.utils import log_error
+        log_error(f"get_recent_episodes failed: {e}")
+        return []

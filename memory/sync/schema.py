@@ -38,9 +38,25 @@ class SpaceDelta(BaseModel):
     deleted: bool = False
 
 
+class EpisodicDelta(BaseModel):
+    """Phase B: Syncable episodic change. From Qdrant arcturus_episodic."""
+
+    episodic_id: str  # session_id (point id)
+    session_id: str
+    user_id: str
+    space_id: str
+    skeleton_json: str
+    original_query: str = ""
+    outcome: str = "completed"
+    version: int = 1
+    device_id: str = ""
+    updated_at: str = ""  # ISO8601
+    deleted: bool = False
+
+
 # --- Sync change (union type) ---
 
-SyncChangeType = Literal["memory", "space"]
+SyncChangeType = Literal["memory", "space", "episodic"]
 
 
 class SyncChange(BaseModel):
@@ -81,6 +97,25 @@ class SyncChange(BaseModel):
             version=s.version,
             updated_at=s.updated_at,
             deleted=s.deleted,
+        )
+
+    @classmethod
+    def from_episodic(cls, e: EpisodicDelta) -> "SyncChange":
+        return cls(
+            type="episodic",
+            payload={
+                "episodic_id": e.episodic_id,
+                "session_id": e.session_id,
+                "user_id": e.user_id,
+                "space_id": e.space_id,
+                "skeleton_json": e.skeleton_json,
+                "original_query": e.original_query,
+                "outcome": e.outcome,
+                "device_id": e.device_id,
+            },
+            version=e.version,
+            updated_at=e.updated_at,
+            deleted=e.deleted,
         )
 
 

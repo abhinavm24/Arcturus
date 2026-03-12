@@ -162,6 +162,52 @@ def _apply_change_to_store(change: SyncChange, user_id: str) -> None:
         except Exception:
             pass
 
+    elif change.type == "episodic":
+        payload = change.payload or {}
+        episodic_id = payload.get("episodic_id") or payload.get("session_id", "")
+        if not episodic_id:
+            return
+        try:
+            from memory.backends.episodic_qdrant_store import EpisodicQdrantStore
+            store = EpisodicQdrantStore()
+            if change.deleted:
+                store.delete(episodic_id)
+                return
+            skeleton_json = payload.get("skeleton_json", "{}")
+            original_query = payload.get("original_query", "")
+            outcome = payload.get("outcome", "completed")
+            uid = payload.get("user_id") or user_id
+            space_id = payload.get("space_id", "__global__")
+            emb = None
+            try:
+                from remme.utils import get_embedding
+                import json
+                sk = json.loads(skeleton_json) if isinstance(skeleton_json, str) else {}
+                searchable = original_query
+                for n in sk.get("nodes", []):
+                    tg = n.get("task_goal") or n.get("description") or ""
+                    if tg:
+                        searchable += "\n" + str(tg)[:300]
+                    inst = n.get("instruction", "") or ""
+                    if inst:
+                        searchable += "\n" + str(inst)[:300]
+                emb = get_embedding(searchable or original_query or "episode")
+            except Exception:
+                pass
+            if emb is not None:
+                store.sync_upsert(
+                    session_id=episodic_id,
+                    skeleton_json=skeleton_json,
+                    original_query=original_query,
+                    outcome=outcome,
+                    user_id=uid,
+                    space_id=space_id,
+                    embedding=emb,
+                    updated_at=change.updated_at,
+                )
+        except Exception:
+            pass
+
 
 @router.post("/push", response_model=PushResponse)
 async def sync_push(request: PushRequest) -> PushResponse:

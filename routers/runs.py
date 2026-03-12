@@ -227,7 +227,7 @@ async def process_run(
             print(f"[{run_id}] MEMORY CONTEXT INJECTED:\n{memory_context}")
             try:
                 run_globals = {"user_id": user_id} if user_id else {}
-                context = await loop.run(query, [], run_globals, [], session_id=run_id, memory_context=memory_context)
+                context = await loop.run(query, [], run_globals, [], session_id=run_id, memory_context=memory_context, space_id=_space_id)
             except asyncio.CancelledError:
                 span.set_status(Status(StatusCode.ERROR, "cancelled"))
                 print(f"[{run_id}] Run cancelled.")

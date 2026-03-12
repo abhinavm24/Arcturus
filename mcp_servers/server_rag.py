@@ -75,6 +75,26 @@ except ImportError:
     BM25_AVAILABLE = False
 
 from config.settings_loader import settings, get_ollama_url, get_model, get_timeout
+from memory.space_constants import SPACE_ID_GLOBAL
+
+
+def _derive_space_id_for_notes(rel_path: str, default_space_id: Optional[str]) -> str:
+    """Phase B: For Notes, derive space_id from path. Notes/__global__/ → __global__; Notes/{uuid}/ → uuid; else default."""
+    norm = rel_path.replace("\\", "/").strip("/")
+    if not norm.lower().startswith("notes/"):
+        return default_space_id or SPACE_ID_GLOBAL
+    parts = norm.split("/")
+    if len(parts) >= 2:
+        first = parts[1]
+        if first == "__global__":
+            return SPACE_ID_GLOBAL
+        import uuid as _uuid
+        try:
+            _uuid.UUID(first)
+            return first
+        except (ValueError, TypeError):
+            pass
+    return default_space_id or SPACE_ID_GLOBAL
 
 # RAG vector store: Qdrant or FAISS (default). Switch via RAG_VECTOR_STORE_PROVIDER=qdrant
 def _get_rag_store():
@@ -1528,8 +1548,8 @@ def process_documents(target_path: str = None, specific_files: list[Path] = None
                         add_kwargs = {"entries": new_meta, "embeddings": new_embs, "remove_doc": remove_doc}
                         if user_id is not None:
                             add_kwargs["user_id"] = user_id
-                        if space_id is not None:
-                            add_kwargs["space_id"] = space_id
+                        effective_space_id = _derive_space_id_for_notes(rel_path, space_id)
+                        add_kwargs["space_id"] = effective_space_id
                         rag_store.add_chunks(**add_kwargs)
 
                         # Update ledger with new format

@@ -220,7 +220,7 @@ class AgentLoop4:
             log_error(f"Failed to resume session: {e}")
             raise
 
-    async def run(self, query, file_manifest, globals_schema, uploaded_files, session_id=None, memory_context=None):
+    async def run(self, query, file_manifest, globals_schema, uploaded_files, session_id=None, memory_context=None, space_id=None):
         """
         Main agent loop: bootstrap context with Query node, optionally run file distiller,
         then planning loop (PlannerAgent) -> merge plan -> execute DAG. Handles replanning when
@@ -260,6 +260,8 @@ class AgentLoop4:
                     original_query=query,
                     file_manifest=file_manifest
                 )
+                if space_id is not None:
+                    self.context.plan_graph.graph["space_id"] = space_id
                 self.context.memory_context = memory_context  # Store for retrieval
                 # Inject multi_mcp immediately
                 self.context.multi_mcp = self.multi_mcp
@@ -826,10 +828,12 @@ class AgentLoop4:
             try:
                 from core.episodic_memory import EpisodicMemory
                 import networkx as nx
+                from memory.user_id import get_user_id
                 mem = EpisodicMemory()
                 graph_data = nx.node_link_data(context.plan_graph)
                 session_data = {"graph": graph_data}
-                await mem.save_episode(session_data)
+                space_id_val = context.plan_graph.graph.get("space_id")
+                await mem.save_episode(session_data, space_id=space_id_val, user_id=get_user_id())
             except Exception as e:
                 print(f"⚠️ Failed to save episodic memory: {e}")
 

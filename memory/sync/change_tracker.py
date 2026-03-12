@@ -9,7 +9,7 @@ from typing import Any, Callable
 
 from memory.space_constants import SPACE_ID_GLOBAL
 from memory.sync.policy import should_sync_space
-from memory.sync.schema import MemoryDelta, SpaceDelta, SyncChange
+from memory.sync.schema import EpisodicDelta, MemoryDelta, SpaceDelta, SyncChange
 
 
 def build_memory_deltas(
@@ -67,9 +67,43 @@ def build_space_deltas(
     return deltas
 
 
+def build_episodic_deltas(
+    episodes: list[dict[str, Any]],
+    *,
+    device_id: str,
+    get_policy: Callable[[str], str] | None = None,
+) -> list[EpisodicDelta]:
+    """Build EpisodicDelta list from episode records. Filter by syncable spaces."""
+    deltas: list[EpisodicDelta] = []
+    for e in episodes:
+        space_id = e.get("space_id") or SPACE_ID_GLOBAL
+        if get_policy and not should_sync_space(space_id, get_policy):
+            continue
+        session_id = str(e.get("session_id", e.get("id", "")))
+        if not session_id:
+            continue
+        deltas.append(
+            EpisodicDelta(
+                episodic_id=session_id,
+                session_id=session_id,
+                user_id=str(e.get("user_id", "")),
+                space_id=space_id,
+                skeleton_json=str(e.get("skeleton_json", "{}")),
+                original_query=str(e.get("original_query", "")),
+                outcome=str(e.get("outcome", "completed")),
+                version=int(e.get("version", 1)),
+                device_id=e.get("device_id", device_id),
+                updated_at=e.get("updated_at", ""),
+                deleted=bool(e.get("deleted", False)),
+            )
+        )
+    return deltas
+
+
 def build_push_changes(
     memory_deltas: list[MemoryDelta],
     space_deltas: list[SpaceDelta],
+    episodic_deltas: list[EpisodicDelta] | None = None,
 ) -> list[SyncChange]:
     """Convert deltas to SyncChange list for push request."""
     out: list[SyncChange] = []
@@ -77,4 +111,6 @@ def build_push_changes(
         out.append(SyncChange.from_memory(m))
     for s in space_deltas:
         out.append(SyncChange.from_space(s))
+    for e in episodic_deltas or []:
+        out.append(SyncChange.from_episodic(e))
     return out

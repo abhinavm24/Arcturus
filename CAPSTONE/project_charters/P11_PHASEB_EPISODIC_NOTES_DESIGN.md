@@ -119,11 +119,11 @@ Add:
 
 ## 6. Implementation Checklist
 
-- [ ] Add `arcturus_episodic` to qdrant_config.yaml
-- [ ] Create `memory/episodic_store.py` (or `memory/backends/episodic_qdrant_store.py`) — Qdrant CRUD for episodic
-- [ ] Update `EpisodicMemory.save_episode` to write to Qdrant + accept `space_id`
-- [ ] Update `search_episodes`, `get_recent_episodes` to read from Qdrant with `user_id`, `space_id` filter
-- [ ] Thread `space_id` from loop/ide_agent into `save_episode`
-- [ ] Add `migrate_episodic_to_qdrant.py` (or extend `migrate_all_memories.py`)
-- [ ] Add `EpisodicDelta` + episodic to sync change_tracker and protocol
-- [ ] Notes: Use path convention `Notes/{space_id}/` or `Notes/` → `__global__`; ensure RAG indexing passes `space_id`
+- [x] Add `arcturus_episodic` to qdrant_config.yaml
+- [x] Create `memory/backends/episodic_qdrant_store.py` — Qdrant CRUD for episodic
+- [x] Update `EpisodicMemory.save_episode` to write to Qdrant + accept `space_id`
+- [x] Update `search_episodes`, `get_recent_episodes` to read from Qdrant with `user_id`, `space_id` filter
+- [x] Thread `space_id` from loop/ide_agent into `save_episode`
+- [x] Add `migrate_episodic_to_qdrant.py` (in `migrate_all_memories.py` sequence)
+- [x] Add `EpisodicDelta` + episodic to sync change_tracker and protocol
+- [x] Notes: Path-derived `space_id` in RAG indexing (`_derive_space_id_for_notes` in server_rag)

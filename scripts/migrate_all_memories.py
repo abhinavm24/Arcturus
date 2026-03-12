@@ -173,6 +173,7 @@ def run_migrations_in_order() -> int:
     scripts = [
         "migrate_faiss_to_qdrant.py",
         "migrate_rag_faiss_to_qdrant.py",
+        "migrate_episodic_to_qdrant.py",
         "migrate_memories_to_neo4j.py",
         "migrate_hubs_to_neo4j.py",
     ]

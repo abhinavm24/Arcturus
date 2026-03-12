@@ -35,3 +35,10 @@ collections:
     distance: cosine
     is_tenant: false
     indexed_payload_fields: [doc]
+
+  arcturus_episodic:       # Phase B: episodic skeletons (session recipes)
+    dimension: 768         # same as nomic-embed-text
+    distance: cosine
+    is_tenant: true
+    tenant_keyword_field: user_id
+    indexed_payload_fields: [session_id, space_id, original_query]

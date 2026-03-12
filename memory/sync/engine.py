@@ -10,6 +10,7 @@ from typing import Any, Callable, Optional
 
 from memory.sync_config import get_device_id, get_sync_server_url, is_sync_engine_enabled
 from memory.sync.change_tracker import (
+    build_episodic_deltas,
     build_memory_deltas,
     build_push_changes,
     build_space_deltas,
@@ -102,7 +103,19 @@ class SyncEngine:
             get_policy=get_policy,
         )
         space_deltas = build_space_deltas(spaces, device_id=self.device_id)
-        changes = build_push_changes(mem_deltas, space_deltas)
+        episodic_deltas = []
+        try:
+            from memory.backends.episodic_qdrant_store import EpisodicQdrantStore
+            ep_store = EpisodicQdrantStore()
+            episodes = ep_store.get_all(limit=10000, user_id=self.user_id)
+            episodic_deltas = build_episodic_deltas(
+                episodes,
+                device_id=self.device_id,
+                get_policy=get_policy,
+            )
+        except Exception:
+            pass
+        changes = build_push_changes(mem_deltas, space_deltas, episodic_deltas)
         req = PushRequest(user_id=self.user_id, device_id=self.device_id, changes=changes)
         return push_changes(self.sync_server_url, req)
 
@@ -136,6 +149,8 @@ class SyncEngine:
                 self._apply_memory_change(c)
             elif c.type == "space":
                 self._apply_space_change(c)
+            elif c.type == "episodic":
+                self._apply_episodic_change(c)
 
     def _apply_memory_change(self, c: SyncChange) -> None:
         payload = c.payload or {}
@@ -221,6 +236,53 @@ class SyncEngine:
                 device_id=payload.get("device_id", ""),
                 updated_at=c.updated_at,
             )
+
+    def _apply_episodic_change(self, c: SyncChange) -> None:
+        """Apply pulled episodic change to episodic store."""
+        payload = c.payload or {}
+        episodic_id = payload.get("episodic_id") or payload.get("session_id", "")
+        if not episodic_id:
+            return
+        try:
+            from memory.backends.episodic_qdrant_store import EpisodicQdrantStore
+            store = EpisodicQdrantStore()
+            if c.deleted:
+                store.delete(episodic_id)
+                return
+            skeleton_json = payload.get("skeleton_json", "{}")
+            original_query = payload.get("original_query", "")
+            outcome = payload.get("outcome", "completed")
+            user_id = payload.get("user_id") or self.user_id
+            space_id = payload.get("space_id", "__global__")
+            emb = None
+            if self._get_embedding:
+                import json
+                sk = json.loads(skeleton_json) if isinstance(skeleton_json, str) else {}
+                searchable = original_query
+                for n in sk.get("nodes", []):
+                    tg = n.get("task_goal") or n.get("description") or ""
+                    if tg:
+                        searchable += "\n" + str(tg)[:300]
+                    inst = n.get("instruction", "") or ""
+                    if inst:
+                        searchable += "\n" + str(inst)[:300]
+                if searchable.strip():
+                    emb = self._get_embedding(searchable)
+                else:
+                    emb = self._get_embedding(original_query or "episode")
+            if emb is not None:
+                store.sync_upsert(
+                    session_id=episodic_id,
+                    skeleton_json=skeleton_json,
+                    original_query=original_query,
+                    outcome=outcome,
+                    user_id=user_id,
+                    space_id=space_id,
+                    embedding=emb,
+                    updated_at=c.updated_at,
+                )
+        except Exception:
+            pass
 
 
 def get_sync_engine(
