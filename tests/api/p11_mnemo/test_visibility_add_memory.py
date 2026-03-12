@@ -46,13 +46,80 @@ def test_add_memory_accepts_valid_visibility(monkeypatch):
 
     remme_utils.get_embedding = fake_embedding
 
-    res = client.post(
-        "/remme/add",
-        json={"text": "hello", "category": "general", "visibility": "private"},
-    )
+    res = client.post("/remme/add", json={"text": "hello", "category": "general", "visibility": "private"})
     assert res.status_code == 200
     body = res.json()
     assert body["status"] == "success"
     # Verify visibility propagated into add kwargs
     assert calls["kwargs"]["metadata"]["visibility"] == "private"
+
+
+def test_add_memory_in_space_defaults_to_space_visibility(monkeypatch):
+    # When space_id is provided and visibility omitted, default should be "space"
+    import routers.remme as remme_router
+
+    calls = {}
+
+    class DummyStore:
+        def add(self, text, embedding, **kwargs):
+            calls["kwargs"] = kwargs
+            return {"id": "mem-2", "text": text, **kwargs}
+
+    remme_router.remme_store = DummyStore()
+
+    import remme.utils as remme_utils
+
+    def fake_embedding(text, task_type=None):
+        return [0.0, 0.0, 0.0]
+
+    remme_utils.get_embedding = fake_embedding
+
+    res = client.post(
+        "/remme/add",
+        json={"text": "space note", "category": "general", "space_id": "space-123"},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "success"
+    assert calls["kwargs"]["metadata"]["visibility"] == "space"
+
+
+def test_add_memory_global_defaults_to_private(monkeypatch):
+    # When no space_id and no visibility, default should be "private"
+    import routers.remme as remme_router
+
+    calls = {}
+
+    class DummyStore:
+        def add(self, text, embedding, **kwargs):
+            calls["kwargs"] = kwargs
+            return {"id": "mem-3", "text": text, **kwargs}
+
+    remme_router.remme_store = DummyStore()
+
+    import remme.utils as remme_utils
+
+    def fake_embedding(text, task_type=None):
+        return [0.0, 0.0, 0.0]
+
+    remme_utils.get_embedding = fake_embedding
+
+    res = client.post(
+        "/remme/add",
+        json={"text": "global note", "category": "general"},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "success"
+    assert calls["kwargs"]["metadata"]["visibility"] == "private"
+
+
+def test_add_memory_rejects_space_visibility_without_space(monkeypatch):
+    # visibility="space" requires a concrete non-global space_id
+    res = client.post(
+        "/remme/add",
+        json={"text": "bad combo", "category": "general", "visibility": "space"},
+    )
+    assert res.status_code == 400
+    assert "requires a non-global space_id" in res.json()["detail"]
 

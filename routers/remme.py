@@ -13,7 +13,7 @@ from shared.state import (
     get_remme_extractor,
     PROJECT_ROOT,
 )
-from memory.space_constants import VISIBILITY_PRIVATE, VISIBILITY_SPACE, VISIBILITY_PUBLIC
+from memory.space_constants import SPACE_ID_GLOBAL, VISIBILITY_PRIVATE, VISIBILITY_SPACE, VISIBILITY_PUBLIC
 from remme.utils import get_embedding
 from core.model_manager import ModelManager
 
@@ -392,15 +392,29 @@ async def add_memory(request: AddMemoryRequest, background_tasks: BackgroundTask
             except Exception:
                 pass
         emb = get_embedding(request.text, task_type="search_query")
-        # Validate visibility if provided
-        if request.visibility is not None:
-            if request.visibility not in {VISIBILITY_PRIVATE, VISIBILITY_SPACE, VISIBILITY_PUBLIC}:
+
+        # Validate / normalize visibility
+        effective_visibility: str | None = request.visibility
+        if effective_visibility is not None:
+            if effective_visibility not in {VISIBILITY_PRIVATE, VISIBILITY_SPACE, VISIBILITY_PUBLIC}:
                 raise HTTPException(status_code=400, detail="Invalid visibility value")
+
+        # Prevent semantically invalid combinations
+        if (not request.space_id or request.space_id == SPACE_ID_GLOBAL) and effective_visibility == VISIBILITY_SPACE:
+            raise HTTPException(status_code=400, detail="visibility='space' requires a non-global space_id")
+
+        # Defaults: in a concrete space → shared with space; global/default → private
+        if effective_visibility is None:
+            if request.space_id and request.space_id != SPACE_ID_GLOBAL:
+                effective_visibility = VISIBILITY_SPACE
+            else:
+                effective_visibility = VISIBILITY_PRIVATE
+
         add_kwargs: dict = {"category": request.category, "source": "manual"}
         if request.space_id:
             add_kwargs["space_id"] = request.space_id
-        if request.visibility:
-            add_kwargs["metadata"] = {"visibility": request.visibility}
+        if effective_visibility:
+            add_kwargs["metadata"] = {"visibility": effective_visibility}
         memory = remme_store.add(request.text, emb, **add_kwargs)
 
         from memory.mnemo_config import is_mnemo_enabled
