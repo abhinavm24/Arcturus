@@ -446,13 +446,25 @@ Use this section as the single list of what to do next; update as you complete i
 
 **Phase 5 items** (to implement when starting Phase 5):
 
-1. **user_id FE ownership** — See §8.7. Move user_id generation/caching to frontend for server deployment; backend accepts client-provided user_id only. (May be partly addressed by login/register already done.)
+1. **user_id FE ownership** — **Implemented.** See §8.7. Frontend owns user_id generation/caching (guest id + registered id); backend accepts client-provided user_id via JWT/X-User-Id only. `memory/user_id.py` reads from auth context with a gated local-migration fallback; AuthMiddleware enforces identity on protected routes.
 
-2. **Lifecycle (core Phase 5)** — Importance scoring, archival, contradiction resolution. CONTRADICTS relationship reserved in schema. Implement `memory/lifecycle.py` and wire into retrieval/ingestion.
+2. **Lifecycle (core Phase 5)** — **Implemented.** Importance scoring, archival heuristics, and contradiction resolution:
+   - `memory/lifecycle.py` computes bounded importance from recency/frequency and tracks access_count/last_accessed_at/archived.
+   - `qdrant_store.add()` initializes lifecycle fields; `memory_retriever.retrieve()` updates usage and excludes archived memories by default.
+   - Neo4j Facts: `_update_fact_contradictions()` creates CONTRADICTS edges between conflicting Facts for the same (user_id, namespace, key).
+   - Lifecycle/lifecycle endpoints and tests cover scoring and overrides.
 
-3. **Profile facts across spaces** — Ensure a small, curated set of global profile facts (e.g. identity/preferences) is always available to agents regardless of active space, while memories/entities remain space-scoped. Implement as a retrieval-layer behavior (adapter/query) without changing `user_id` as the primary tenant key.
+3. **Profile facts across spaces** — **Implemented.** `build_preferences_from_neo4j(user_id, space_id/space_ids)` uses `kg.get_facts_for_user()` to read global facts (`space_id="__global__"`) plus facts in the requested space(s), then maps them into the hub response and resolves conflicts by confidence and last_seen_at. `GET /remme/preferences?space_id=` exposes this for agents/frontend so identity/preferences are always available while memories/entities remain space-scoped.
 
-4. **Other** — Expansion depth (multi-hop), Phase 3 retrieval scoping by space, graph explorer, spaces manager — per delivery README.
+4. **Privacy controls for memories** — **Implemented (write-time, single-tenant).** Memories have a `visibility` field (`private` | `space` | `public`):
+   - Constants in `memory/space_constants.py`; indexed in Qdrant (`visibility` payload field).
+   - `POST /remme/add` accepts `visibility`, validates allowed values, and normalizes defaults:
+     - In a concrete space (non-global): default visibility is `space` (shared with that space’s participants).
+     - Global/unscoped: default visibility is `private`.
+     - `visibility="space"` without a non-global space_id is rejected.
+   - Today Qdrant is tenant-scoped by user_id, so these controls prepare for future cross-user shared-space retrieval; current behavior remains strictly per-user.
+
+5. **Other** — Phase 3 retrieval scoping by space is implemented for memories/entities (see §8.4 and §8.8a). **Expansion depth (multi-hop)** and UI surfaces (graph explorer, spaces manager) are moved to §8.9 Future Phase (post–Phase 5).
 
 **Deferred to post–Phase 5:**
 
