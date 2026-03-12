@@ -92,6 +92,7 @@ def append_env_vars_for_docker() -> None:
         "NEO4J_USER=neo4j",
         "NEO4J_PASSWORD=arcturus-neo4j",
         "MNEMO_ENABLED=true",
+        "VITE_ENABLE_LOCAL_MIGRATION=true",
         "# --- End migrate_all_memories.py section ---",
         "",
     ]
@@ -143,6 +144,11 @@ def prompt_cloud_setup() -> None:
         "3) Enable Mnemo (unified extraction + Fact/Evidence):\n"
         "   - Set in your .env:\n"
         "       MNEMO_ENABLED=true\n"
+    )
+    print(
+        "4) Enable Local Migration:\n"
+        "   - Set in your .env:\n"
+        "       VITE_ENABLE_LOCAL_MIGRATION=true\n"
     )
 
     input(

@@ -172,3 +172,24 @@ async def get_current_user_info(db: Session = Depends(get_session)):
         email=user.email,
         auth_type=user.auth_type
     )
+
+@router.get("/legacy-guest-id")
+async def get_legacy_guest_id():
+    """
+    Returns the legacy fallback offline user_id from user_id.json if it exists.
+    If it doesn't exist, we return null so the frontend knows to gracefully fall back
+    to generating its own random guest ID.
+    """
+    from memory.user_id import _USER_ID_PATH
+    import json
+    
+    if _USER_ID_PATH.exists():
+        try:
+            data = json.loads(_USER_ID_PATH.read_text())
+            uid = data.get("user_id")
+            if uid:
+                return {"guest_id": uid}
+        except Exception:
+            pass
+            
+    return {"guest_id": None}

@@ -111,37 +111,6 @@ def _neo4j_migration_tx(tx, guest_id: str, reg_id: str):
     
     # 2. Re-wire edges from the Guest User node to the Registered User node
     # This covers: HAS_MEMORY, HAS_FACT, and derived relationships (LIVES_IN, WORKS_AT, KNOWS, PREFERS)
-    tx.run(
-        """
-        MATCH (guest:User {id: $guest_id})-[r]->(target)
-        MATCH (reg:User {id: $reg_id})
-        
-        // Use apoc or dynamic relationship creation if available, or just clone standard ones
-        // Since we know the schema, we can match and recreate explicitly
-        
-        // Edge: HAS_MEMORY
-        OPTIONAL MATCH (guest)-[r_mem:HAS_MEMORY]->(m:Memory)
-        FOREACH (_ IN CASE WHEN r_mem IS NOT NULL THEN [1] ELSE [] END |
-            MERGE (reg)-[:HAS_MEMORY]->(m)
-        )
-        
-        // Edge: HAS_FACT
-        OPTIONAL MATCH (guest)-[r_fact:HAS_FACT]->(f:Fact)
-        FOREACH (_ IN CASE WHEN r_fact IS NOT NULL THEN [1] ELSE [] END |
-            MERGE (reg)-[:HAS_FACT]->(f)
-        )
-        
-        // Edges: User->Entity (LIVES_IN, WORKS_AT, KNOWS, PREFERS)
-        OPTIONAL MATCH (guest)-[r_ent:LIVES_IN|WORKS_AT|KNOWS|PREFERS]->(ent:Entity)
-        // Due to Cypher restrictions on dynamic type creation without APOC, we handle them carefully
-        // or rely on the Fact derivations to naturally recreate them. 
-        // For absolute safety, relying on `_derive_user_entity_from_facts()` later is cleaner,
-        // but we can move them manually:
-        // (Simplified for now: we delete the guest node; if we need the properties copied we should use APOC)
-        """,
-        guest_id=guest_id,
-        reg_id=reg_id
-    )
     
     # A cleaner approach in Neo4j 5+ without APOC for Edge cloning:
     # We just call apoc.refactor.mergeNodes if APOC is installed, but since we can't guarantee APOC:

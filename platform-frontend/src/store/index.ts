@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import axios from 'axios';
 import { persist } from 'zustand/middleware';
 import type {
     Run,
@@ -13,7 +14,7 @@ import type {
     ContextItem,
 } from '../types';
 import { applyNodeChanges, applyEdgeChanges, type NodeChange, type EdgeChange } from 'reactflow';
-import { api, API_BASE } from '../lib/api';
+import { api, API_BASE, AUTH_API_BASE } from '../lib/api';
 
 // --- Slices Types ---
 
@@ -496,26 +497,58 @@ export const useAppStore = create<AppState>()(
             authUserEmail: null,
             isAuthModalOpen: false,
             setIsAuthModalOpen: (open) => set({ isAuthModalOpen: open }),
-            setAuthUserId: (id, status, token = null, firstName = null, email = null) => set({ 
+            setAuthUserId: (id, status, token = undefined, firstName = undefined, email = undefined) => set({ 
                 authUserId: id, 
                 authStatus: status, 
                 authToken: token,
                 authUserFirstName: firstName,
                 authUserEmail: email
             }),
-            initAuth: () => {
+            initAuth: async () => {
                 const state = get();
                 if (state.authStatus === 'logged_in' && state.authUserId) return; // user is currently logged in
-                // If we don't have a guest ID, or if we are guests, ensure an ID exists
+                
+                const isLocalMigrationEnabled = import.meta.env.VITE_ENABLE_LOCAL_MIGRATION === 'true';
+
+                // Try to fetch legacy guest ID if enabled, even if they already have a persisted random guest ID
+                if (isLocalMigrationEnabled && state.authStatus === 'guest') {
+                    try {
+                        const res = await axios.get(`${AUTH_API_BASE}/auth/legacy-guest-id`);
+                        if (res.data && res.data.guest_id) {
+                            const newGuestId = `guest_${res.data.guest_id}`;
+                            if (state.authUserId !== newGuestId) {
+                                set({ authUserId: newGuestId, authStatus: 'guest' });
+                            }
+                            return;
+                        }
+                    } catch (e) {
+                        console.log('[Auth] Could not fetch legacy guest ID, falling back to existing or random UUID', e);
+                    }
+                }
+                
+                // If we get here, either migration is disabled, or it failed to fetch.
+                // Ensure they at least have SOME guest ID if they don't already.
                 if (!state.authUserId) {
                     const guestId = `guest_${crypto.randomUUID()}`;
                     set({ authUserId: guestId, authStatus: 'guest' });
-                    // Ensure the backend knows about the API base if we make calls here, but this is handled by settings/interceptor.
                 }
             },
-            logoutAuth: () => {
-                // Return to guest mode
-                const guestId = `guest_${crypto.randomUUID()}`;
+            logoutAuth: async () => {
+                // Return to guest mode, try to fetch legacy ID first if local_migration is enabled
+                let guestId = `guest_${crypto.randomUUID()}`;
+                const isLocalMigrationEnabled = import.meta.env.VITE_ENABLE_LOCAL_MIGRATION === 'true';
+                
+                if (isLocalMigrationEnabled) {
+                    try {
+                        const res = await axios.get(`${AUTH_API_BASE}/auth/legacy-guest-id`);
+                        if (res.data && res.data.guest_id) {
+                            guestId = `guest_${res.data.guest_id}`;
+                        }
+                    } catch (e) {
+                        // silently fall back
+                    }
+                }
+                
                 set({ authUserId: guestId, authStatus: 'guest', authToken: null, authUserFirstName: null, authUserEmail: null });
             },
 
