@@ -38,7 +38,11 @@ from memory.user_id import get_user_id
 
 # Optional Neo4j dependency
 try:
+    import logging
     from neo4j import GraphDatabase
+
+    # Suppress "Received notification from DBMS server" logs (Neo4j 5+ status notifications)
+    logging.getLogger("neo4j.notifications").setLevel(logging.CRITICAL)
     _NEO4J_AVAILABLE = True
 except ImportError:
     _NEO4J_AVAILABLE = False
@@ -113,7 +117,13 @@ class KnowledgeGraph:
         self._enabled = _is_neo4j_enabled() and _NEO4J_AVAILABLE
         if self._enabled and self.password:
             try:
-                self._driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password))
+                kwargs = {"uri": self.uri, "auth": (self.user, self.password)}
+                try:
+                    from neo4j import NotificationMinimumSeverity
+                    kwargs["warn_notification_severity"] = NotificationMinimumSeverity.OFF
+                except (ImportError, AttributeError):
+                    pass
+                self._driver = GraphDatabase.driver(**kwargs)
                 self._driver.verify_connectivity()
                 self._ensure_schema()
                 log_step("✅ KnowledgeGraph (Neo4j) initialized", symbol="🔧")
