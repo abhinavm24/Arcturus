@@ -74,6 +74,7 @@ dependencies = [
     "pyjwt",
     "passlib",
     "bcrypt",
+    "email-validator>=2.3.0",
 ]
 
 [build-system]
@@ -101,7 +102,6 @@ packages = [
 ]
 
 [tool.uv]
-required-environments = ["sys_platform == 'win32' and platform_machine == 'AMD64'"]
 
 [dependency-groups]
 dev = [
