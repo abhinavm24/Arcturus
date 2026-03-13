@@ -1,5 +1,7 @@
 """
 Qdrant-backed implementation of VectorStoreProtocol.
+
+Phase C: Sparse vectors (text-bm25) for hybrid search via FastEmbed SPLADE.
 """
 
 import json
@@ -16,12 +18,18 @@ try:
     from qdrant_client.http import models as http_models
     from qdrant_client.models import (
         Distance,
-        VectorParams,
-        PointStruct,
-        Filter,
         FieldCondition,
-        MatchValue,
+        Filter,
+        Fusion,
+        FusionQuery,
         MatchAny,
+        MatchValue,
+        Modifier,
+        PointStruct,
+        Prefetch,
+        SparseVector,
+        SparseVectorParams,
+        VectorParams,
     )
 except ImportError:
     raise ImportError(
@@ -60,22 +68,42 @@ class QdrantVectorStore:
         self._distance = _distance_from_str(cfg.get("distance", "cosine"))
         self._is_tenant = cfg.get("is_tenant", False)
         self._tenant_keyword_field = cfg.get("tenant_keyword_field", "user_id")
+        self._sparse_config = cfg.get("sparse_vectors", {}).get("text-bm25")
         self.url = get_qdrant_url()
         api_key = get_qdrant_api_key()
         self.client = QdrantClient(url=self.url, api_key=api_key, timeout=10.0)
         self._scanned_runs_path = Path(scanned_runs_path) if scanned_runs_path else Path(__file__).parent.parent.parent / "memory" / "remme_index" / "scanned_runs.json"
         self._ensure_collection()
+        self._has_sparse = self._check_has_sparse()
         log_step(f"✅ QdrantVectorStore initialized: {self.url}/{self.collection_name}", symbol="🔧")
+
+    def _check_has_sparse(self) -> bool:
+        """Check if collection has sparse vectors (Phase C)."""
+        try:
+            info = self.client.get_collection(self.collection_name)
+            sparse = getattr(info.config, "params", None) and getattr(
+                info.config.params, "sparse_vectors", None
+            )
+            return bool(sparse and "text-bm25" in sparse)
+        except Exception:
+            return False
 
     def _ensure_collection(self) -> None:
         collections = self.client.get_collections()
         collection_names = [c.name for c in collections.collections]
         created = False
         if self.collection_name not in collection_names:
-            self.client.create_collection(
+            sparse_config = None
+            if self._sparse_config and isinstance(self._sparse_config, dict):
+                sparse_config = {"text-bm25": SparseVectorParams(modifier=Modifier.IDF)}
+            vec_config = VectorParams(size=self.dimension, distance=self._distance)
+            kwargs = dict(
                 collection_name=self.collection_name,
-                vectors_config=VectorParams(size=self.dimension, distance=self._distance),
+                vectors_config={"default": vec_config} if sparse_config else vec_config,
             )
+            if sparse_config:
+                kwargs["sparse_vectors_config"] = sparse_config
+            self.client.create_collection(**kwargs)
             log_step(f"📦 Created collection: {self.collection_name}", symbol="✨")
             created = True
         if self._is_tenant and self._tenant_keyword_field:
@@ -245,7 +273,17 @@ class QdrantVectorStore:
         # Initialize lifecycle-related fields (importance, access_count, archived, last_accessed_at).
         initialize_payload(payload)
 
-        point = PointStruct(id=memory_id, vector=embedding_list, payload=payload)
+        # Phase C: include sparse vector when collection has text-bm25
+        if self._has_sparse and text:
+            try:
+                from memory.sparse_embedding import embed_sparse_single
+                idx, vals = embed_sparse_single(text)
+                vec_data = {"default": embedding_list, "text-bm25": SparseVector(indices=idx, values=vals)}
+            except Exception:
+                vec_data = embedding_list
+        else:
+            vec_data = embedding_list
+        point = PointStruct(id=memory_id, vector=vec_data, payload=payload)
         self.client.upsert(collection_name=self.collection_name, points=[point])
         log_step(f"💾 Added memory: {memory_id[:8]}... ({len(text)} chars)", symbol="📝")
 
@@ -281,42 +319,36 @@ class QdrantVectorStore:
             if conditions:
                 search_filter = Filter(must=conditions)
 
-        distance_threshold = None
-        if score_threshold is not None:
-            distance_threshold = 1.0 - score_threshold
+        distance_threshold = 1.0 - score_threshold if score_threshold is not None else None
 
         try:
-            # if hasattr(self.client, "search"):
-            #     search_results = self.client.search(
-            #         collection_name=self.collection_name,
-            #         query_vector=query_vector,
-            #         limit=k * 2 if query_text else k,
-            #         score_threshold=distance_threshold,
-            #         query_filter=search_filter,
-            #     )
-            # else:
-            #     from qdrant_client.http import models as rest_models
-            #     search_request = rest_models.SearchRequest(
-            #         vector=query_vector,
-            #         limit=k * 2 if query_text else k,
-            #         score_threshold=distance_threshold,
-            #         filter=search_filter,
-            #     )
-            #     response = self.client.http.collections_api.query_points(
-            #         collection_name=self.collection_name,
-            #         search_request=search_request,
-            #     )
-            #     search_results = response.result
-            search_results = self.client.query_points(
-                    collection_name=self.collection_name,
-                    query=query_vector,
-                    limit=k * 2 if query_text else k,
-                    score_threshold=distance_threshold,
-                    query_filter=search_filter,
-                )
+            if self._has_sparse and query_text and query_text.strip():
+                # Phase C: hybrid prefetch (dense + sparse) + RRF fusion
+                try:
+                    from memory.sparse_embedding import embed_sparse_single
+                    idx, vals = embed_sparse_single(query_text)
+                    sparse_query = SparseVector(indices=idx, values=vals)
+                    prefetches = [
+                        Prefetch(query=query_vector, using="default", limit=k * 2),
+                        Prefetch(query=sparse_query, using="text-bm25", limit=k * 2),
+                    ]
+                    search_results = self.client.query_points(
+                        collection_name=self.collection_name,
+                        prefetch=prefetches,
+                        query=FusionQuery(fusion=Fusion.RRF),
+                        limit=k * 2,
+                        with_payload=True,
+                        query_filter=search_filter,
+                    )
+                except Exception:
+                    search_results = self._do_vector_search(query_vector, k * 2, distance_threshold, search_filter)
+            else:
+                search_results = self._do_vector_search(query_vector, k * 2 if query_text else k, distance_threshold, search_filter)
 
             if hasattr(search_results, "result"):
                 search_results = search_results.result
+            elif hasattr(search_results, "points"):
+                search_results = search_results.points
 
             results = []
             for result in search_results:
@@ -332,12 +364,32 @@ class QdrantVectorStore:
                     if rid is not None:
                         results.append({"id": str(rid), "score": 1.0 - (rscore or 0), **rpayload})
 
-            if query_text:
+            if query_text and not (self._has_sparse and query_text.strip()):
                 results = self._apply_keyword_boosting(results, query_text, k)
             return results[:k]
         except Exception as e:
             log_error(f"Failed to search Qdrant: {e}")
             return []
+
+    def _do_vector_search(
+        self,
+        query_vector: list,
+        limit: int,
+        score_threshold: Optional[float],
+        search_filter: Optional[Filter],
+    ):
+        kwargs = dict(
+            collection_name=self.collection_name,
+            query=query_vector,
+            limit=limit,
+            with_payload=True,
+            query_filter=search_filter,
+        )
+        if score_threshold is not None:
+            kwargs["score_threshold"] = score_threshold
+        if self._has_sparse:
+            kwargs["using"] = "default"
+        return self.client.query_points(**kwargs)
 
     def _apply_keyword_boosting(
         self, results: List[Dict], query_text: str, k: int

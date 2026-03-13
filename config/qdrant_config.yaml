@@ -16,6 +16,10 @@ collections:
     tenant_keyword_field: user_id    # payload field for tenant isolation (keyword index)
     # indexed_payload_fields are used for filtered search. Include lifecycle/privacy fields we want to filter on.
     indexed_payload_fields: [category, source, session_id, entity_labels, space_id, archived, visibility]  # space_id for Phase 3 filtering; archived/visibility for lifecycle/privacy
+    # Phase C: sparse vector for hybrid search (client-side FastEmbed SPLADE)
+    sparse_vectors:
+      text-bm25:
+        modifier: idf
 
   test_memories:            # Test collection; mirrors arcturus_memories index setup
     dimension: 768
@@ -29,6 +33,10 @@ collections:
     is_tenant: true                  # Phase A: multi-tenant; scope by user_id
     tenant_keyword_field: user_id
     indexed_payload_fields: [doc, doc_type, session_id, space_id]
+    # Phase C: sparse vector for hybrid search (client-side FastEmbed SPLADE)
+    sparse_vectors:
+      chunk-bm25:
+        modifier: idf
 
   test_rag_chunks:         # Test collection; mirrors arcturus_rag_chunks
     dimension: 768

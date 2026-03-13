@@ -67,13 +67,6 @@ from typing import Optional
 # Import the new index scheduler
 from index_scheduler import init_scheduler, get_scheduler, shutdown_scheduler
 
-# BM25 for hybrid search
-try:
-    from rank_bm25 import BM25Okapi
-    BM25_AVAILABLE = True
-except ImportError:
-    BM25_AVAILABLE = False
-
 from config.settings_loader import settings, get_ollama_url, get_model, get_timeout
 from memory.space_constants import SPACE_ID_GLOBAL
 
@@ -356,68 +349,6 @@ def analyze_query(query: str) -> QueryAnalysis:
     
     return analysis
 
-class BM25Index:
-    """BM25 keyword search index for hybrid search."""
-    
-    def __init__(self):
-        self.bm25 = None
-        self.corpus = []
-        self.chunk_ids = []
-        self.metadata = []
-    
-    def tokenize(self, text: str) -> list:
-        text = text.lower()
-        text = re.sub(r'[^\w\s]', ' ', text)
-        return [t for t in text.split() if len(t) > 1]
-    
-    def build_from_metadata(self, metadata: list):
-        if not BM25_AVAILABLE:
-            mcp_log("WARN", "BM25 not available - install rank-bm25")
-            return
-        self.corpus = []
-        self.chunk_ids = []
-        self.metadata = metadata
-        for entry in metadata:
-            self.corpus.append(self.tokenize(entry.get('chunk', '')))
-            self.chunk_ids.append(entry.get('chunk_id', ''))
-        self.bm25 = BM25Okapi(self.corpus)
-        mcp_log("INFO", f"BM25 index built with {len(self.corpus)} chunks")
-    
-    def search(self, query: str, top_k: int = 20) -> list:
-        if not self.bm25:
-            return []
-        tokens = self.tokenize(query)
-        scores = self.bm25.get_scores(tokens)
-        top_indices = np.argsort(scores)[::-1][:top_k]
-        return [(self.chunk_ids[i], float(scores[i])) for i in top_indices if scores[i] > 0]
-    
-    def save(self, path: str):
-        with open(path, 'wb') as f:
-            pickle.dump({'bm25': self.bm25, 'corpus': self.corpus, 'chunk_ids': self.chunk_ids}, f)
-    
-    def load(self, path: str) -> bool:
-        try:
-            with open(path, 'rb') as f:
-                data = pickle.load(f)
-            self.bm25 = data['bm25']
-            self.corpus = data['corpus']
-            self.chunk_ids = data['chunk_ids']
-            return True
-        except:
-            return False
-
-# Global BM25 index instance
-_bm25_index = BM25Index()
-
-def rrf_fuse(bm25_results: list, faiss_results: list, k: int = 60) -> list:
-    """Reciprocal Rank Fusion of BM25 and FAISS results."""
-    scores = defaultdict(float)
-    for rank, (chunk_id, _) in enumerate(bm25_results):
-        scores[chunk_id] += 1.0 / (k + rank + 1)
-    for rank, (chunk_id, _) in enumerate(faiss_results):
-        scores[chunk_id] += 1.0 / (k + rank + 1)
-    return sorted(scores.items(), key=lambda x: x[1], reverse=True)
-
 def entity_gate(results: list, metadata: list, analysis: QueryAnalysis) -> tuple:
     """Filter results based on query entities. Returns (filtered_results, gate_applied)."""
     if analysis.intent == "SEMANTIC" or not analysis.entities:
@@ -552,11 +483,10 @@ CONTEXT FROM DOCUMENT:
 
 @mcp.tool()
 def search_stored_documents_rag(query: str, doc_path: str = None, user_id: str = None, space_id: str = None) -> list[str]:
-    """Search stored documents using HYBRID search (BM25 + vector + entity gating).
+    """Search stored documents using hybrid search (Qdrant: sparse+vector+RRF; FAISS: vector) and entity gating.
     Returns relevant chunks with source information.
     Optionally provide doc_path to search within a specific document only.
     Phase A: user_id and space_id for tenant/space scope."""
-    global _bm25_index
     ensure_rag_ready()
     mcp_log("SEARCH", f"Query: {query} (Doc: {doc_path}, user_id: {user_id or 'all'})")
     
@@ -579,30 +509,16 @@ def search_stored_documents_rag(query: str, doc_path: str = None, user_id: str =
         analysis = analyze_query(query)
         mcp_log("SEARCH", f"Intent: {analysis.intent}, Entities: {analysis.entities}")
         
-        # 2. Vector search (Qdrant or FAISS)
+        # 2. Vector/hybrid search (Qdrant: hybrid prefetch+RRF; FAISS: vector-only)
         query_vec = get_embedding(query)
         k = 50 if doc_path else 30
-        faiss_results = rag_store.search(query_vec, k=k, user_id=user_id, space_id=space_id)
+        search_kwargs = {"query_vector": query_vec, "k": k, "user_id": user_id, "space_id": space_id}
+        if use_qdrant and hasattr(rag_store, "search"):
+            search_kwargs["query_text"] = query
+        faiss_results = rag_store.search(**search_kwargs)
+        fused_results = [(cid, score) for cid, score in faiss_results]
         
-        # 3. BM25 keyword search (if available)
-        bm25_results = []
-        if BM25_AVAILABLE:
-            bm25_path = ROOT / "faiss_index" / "bm25_index.pkl"
-            if not _bm25_index.bm25:
-                if bm25_path.exists():
-                    _bm25_index.load(str(bm25_path))
-                else:
-                    _bm25_index.build_from_metadata(metadata)
-                    _bm25_index.save(str(bm25_path))
-            bm25_results = _bm25_index.search(query, top_k=30)
-        
-        # 4. RRF Fusion
-        if bm25_results:
-            fused_results = rrf_fuse(bm25_results, faiss_results)
-        else:
-            fused_results = [(cid, score) for cid, score in faiss_results]
-        
-        # 5. Entity Gate (for lexical-intent queries)
+        # 3. Entity Gate (for lexical-intent queries)
         gated_results, gate_applied = entity_gate(fused_results, metadata, analysis)
         
         if gate_applied:
@@ -612,7 +528,6 @@ def search_stored_documents_rag(query: str, doc_path: str = None, user_id: str =
                 mcp_log("SEARCH", f"No documents contain '{analysis.entities}'")
                 return [f"⚠️ No documents contain '{', '.join(analysis.entities)}' exactly. Try a broader search."]
         
-        # 6. Build result list
         chunk_lookup = {e['chunk_id']: e for e in metadata}
         results = []
         seen_docs = set()
@@ -1855,9 +1770,6 @@ def start_background_services():
                     rag_store.add_chunks(entries=new_meta, embeddings=new_embs, remove_doc=rel_path)
                     metadata.extend(new_meta)
                     METADATA_FILE.write_text(json.dumps(metadata, indent=2))
-                    if BM25_AVAILABLE:
-                        _bm25_index.build_from_metadata(metadata)
-                        _bm25_index.save(str(INDEX_CACHE / "bm25_index.pkl"))
                     return {"chunk_count": len(new_embs)}
             return {"chunk_count": 0}
         except Exception as e:
@@ -1876,9 +1788,6 @@ def start_background_services():
                     rag_store.delete_by_doc(rel_path)
                     METADATA_FILE.write_text(json.dumps(new_metadata, indent=2))
                     mcp_log("INFO", f"Removed {rel_path} from index ({len(metadata) - len(new_metadata)} chunks)")
-                    if BM25_AVAILABLE:
-                        _bm25_index.build_from_metadata(new_metadata)
-                        _bm25_index.save(str(INDEX_CACHE / "bm25_index.pkl"))
         except Exception as e:
             mcp_log("ERROR", f"Delete callback failed for {rel_path}: {e}")
     

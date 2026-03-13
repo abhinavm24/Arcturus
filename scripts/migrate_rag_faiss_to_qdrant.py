@@ -5,7 +5,7 @@ Migrate RAG FAISS index to Qdrant arcturus_rag_chunks collection.
 Reads chunks from mcp_servers/faiss_index (metadata.json + index.bin)
 and adds each to the Qdrant arcturus_rag_chunks collection.
 Phase A: Populates user_id and space_id for tenant/space scope.
-Keeps metadata.json for BM25 (unchanged).
+Phase C: QdrantRAGStore.add_chunks() generates sparse vectors (FastEmbed SPLADE) when collection has sparse_vectors config.
 
 Usage:
     # For Qdrant Cloud, ensure .env has:

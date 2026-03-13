@@ -203,20 +203,20 @@ Implement 3.1 first; then apply the same pattern for memories in 3.2.
 
 ### 3.1 BM25 to Qdrant (RAG)
 
-- [ ] Add `chunk-bm25` sparse vector config to `arcturus_rag_chunks` in qdrant_config
-- [ ] Add FastEmbed sparse embedding; update `QdrantRAGStore.add_chunks()` to generate and store sparse vectors from chunk text
-- [ ] Add `search_hybrid()` (or extend `search()`) in `QdrantRAGStore` using prefetch + RRF
-- [ ] Update `server_rag.search_stored_documents_rag()` to use Qdrant hybrid search when provider is Qdrant; remove BM25Index / bm25_index.pkl
-- [ ] Update migration script to populate sparse vectors for existing RAG chunks
+- [x] Add `chunk-bm25` sparse vector config to `arcturus_rag_chunks` in qdrant_config
+- [x] Add FastEmbed sparse embedding; update `QdrantRAGStore.add_chunks()` to generate and store sparse vectors from chunk text
+- [x] Extend `QdrantRAGStore.search()` with prefetch + RRF using prefetch + RRF
+- [x] Update server_rag to use Qdrant hybrid; remove BM25Index to use Qdrant hybrid search when provider is Qdrant; remove BM25Index / bm25_index.pkl
+- [x] New chunks get sparse on add; reindex populates sparse for existing RAG chunks
 - [ ] Optional: remove `rank-bm25` from pyproject.toml if unused
 
 ### 3.2 Hybrid Search for Memories
 
-- [ ] Add `text-bm25` sparse vector config to `arcturus_memories` in qdrant_config
-- [ ] Add FastEmbed sparse embedding; update `QdrantVectorStore.add()` to generate and store sparse vector from memory text
-- [ ] Extend `QdrantVectorStore.search()` to use hybrid prefetch + RRF when `query_text` is provided
+- [x] Add `text-bm25` sparse vector config to `arcturus_memories` in qdrant_config
+- [x] Add FastEmbed; update `QdrantVectorStore.add()` to generate and store sparse vector from memory text
+- [x] Extend `QdrantVectorStore.search()` to use hybrid prefetch + RRF when `query_text` is provided
 - [ ] Add migration/backfill for existing memories (sparse vectors)
-- [ ] Deprecate or simplify `_apply_keyword_boosting` when hybrid is active
+- [x] Skip `_apply_keyword_boosting` when hybrid active when hybrid is active
 
 ---
 
