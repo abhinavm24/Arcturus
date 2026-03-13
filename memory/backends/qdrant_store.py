@@ -23,6 +23,7 @@ try:
         Filter,
         Fusion,
         FusionQuery,
+        IsEmptyCondition,
         MatchAny,
         MatchValue,
         Modifier,
@@ -32,6 +33,7 @@ try:
         SparseVectorParams,
         VectorParams,
     )
+    from qdrant_client.http.models import PayloadField
 except ImportError:
     raise ImportError(
         "qdrant-client is required for Qdrant backend. Install with: pip install qdrant-client"
@@ -551,12 +553,22 @@ class QdrantVectorStore:
             merged_filter = self._tenant_filter(filter_metadata)
             search_filter = None
             if merged_filter:
-                conditions = [
-                    FieldCondition(key=key, match=MatchValue(value=value))
-                    for key, value in merged_filter.items()
-                ]
-                if conditions:
-                    search_filter = Filter(must=conditions)
+                must_conditions: List[Any] = []
+                for key, value in merged_filter.items():
+                    # Global space: include points with space_id=="__global__" OR missing/empty space_id (legacy).
+                    if key == "space_id" and value == SPACE_ID_GLOBAL:
+                        must_conditions.append(
+                            Filter(
+                                should=[
+                                    FieldCondition(key="space_id", match=MatchValue(value=SPACE_ID_GLOBAL)),
+                                    IsEmptyCondition(is_empty=PayloadField(key="space_id")),
+                                ]
+                            )
+                        )
+                    else:
+                        must_conditions.append(FieldCondition(key=key, match=MatchValue(value=value)))
+                if must_conditions:
+                    search_filter = Filter(must=must_conditions)
             results = []
             offset = None
             while True:
