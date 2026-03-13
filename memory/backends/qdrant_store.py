@@ -230,13 +230,17 @@ class QdrantVectorStore:
     ) -> Dict[str, Any]:
         embedding_list = embedding.tolist() if isinstance(embedding, np.ndarray) else list(embedding)
         if deduplication_threshold > 0:
+            min_similarity = 1.0 - deduplication_threshold  # e.g. 0.85 for threshold 0.15
             similar = self.search(
                 query_vector=np.array(embedding_list),
+                query_text=None,  # dense-only for dedup; no space filter to match any user memory
                 k=1,
-                score_threshold=1.0 - deduplication_threshold,
+                score_threshold=min_similarity,
                 filter_metadata=self._tenant_filter() if self._is_tenant else None,
             )
-            if similar:
+            # Only treat as duplicate if the returned score (similarity) actually meets threshold.
+            # Qdrant may return results that don't meet score_threshold; enforce in code.
+            if similar and (similar[0].get("score") or 0) >= min_similarity:
                 memory_id = similar[0]["id"]
                 self._update_timestamp(memory_id, source)
                 return similar[0]
