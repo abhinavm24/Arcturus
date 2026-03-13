@@ -105,14 +105,16 @@ class SyncEngine:
         space_deltas = build_space_deltas(spaces, device_id=self.device_id)
         episodic_deltas = []
         try:
-            from memory.backends.episodic_qdrant_store import EpisodicQdrantStore
-            ep_store = EpisodicQdrantStore()
-            episodes = ep_store.get_all(limit=10000, user_id=self.user_id)
-            episodic_deltas = build_episodic_deltas(
-                episodes,
-                device_id=self.device_id,
-                get_policy=get_policy,
-            )
+            from memory.episodic import get_episodic_store_provider
+            if get_episodic_store_provider() == "qdrant":
+                from memory.backends.episodic_qdrant_store import EpisodicQdrantStore
+                ep_store = EpisodicQdrantStore()
+                episodes = ep_store.get_all(limit=10000, user_id=self.user_id)
+                episodic_deltas = build_episodic_deltas(
+                    episodes,
+                    device_id=self.device_id,
+                    get_policy=get_policy,
+                )
         except Exception:
             pass
         changes = build_push_changes(mem_deltas, space_deltas, episodic_deltas)
@@ -238,12 +240,25 @@ class SyncEngine:
             )
 
     def _apply_episodic_change(self, c: SyncChange) -> None:
-        """Apply pulled episodic change to episodic store."""
+        """Apply pulled episodic change to episodic store (Qdrant or local JSON when legacy)."""
         payload = c.payload or {}
         episodic_id = payload.get("episodic_id") or payload.get("session_id", "")
         if not episodic_id:
             return
         try:
+            from memory.episodic import get_episodic_store_provider, MEMORY_DIR
+            if get_episodic_store_provider() == "legacy":
+                if c.deleted:
+                    path = MEMORY_DIR / f"skeleton_{episodic_id}.json"
+                    if path.exists():
+                        path.unlink(missing_ok=True)
+                    return
+                import json
+                skeleton_json = payload.get("skeleton_json", "{}")
+                sk = json.loads(skeleton_json) if isinstance(skeleton_json, str) else {}
+                path = MEMORY_DIR / f"skeleton_{episodic_id}.json"
+                path.write_text(json.dumps(sk, indent=2))
+                return
             from memory.backends.episodic_qdrant_store import EpisodicQdrantStore
             store = EpisodicQdrantStore()
             if c.deleted:

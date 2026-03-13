@@ -147,13 +147,21 @@ class EpisodicMemory:
         space_id: Optional[str] = None,
         user_id: Optional[str] = None,
     ) -> None:
-        """Save episode skeleton to Qdrant. Phase B: vector search with user/space scope."""
+        """Save episode skeleton. Uses Qdrant when EPISODIC_STORE_PROVIDER=qdrant; local JSON when legacy."""
         try:
             skeleton = MemorySkeletonizer.skeletonize(session_data)
             session_id = skeleton.get("id")
             if not session_id:
                 return
             space_id = space_id or SPACE_ID_GLOBAL
+
+            from memory.episodic import get_episodic_store_provider, MEMORY_DIR
+
+            if get_episodic_store_provider() == "legacy":
+                path = MEMORY_DIR / f"skeleton_{session_id}.json"
+                path.write_text(json.dumps(skeleton, indent=2))
+                return
+
             searchable_text = _build_searchable_text(skeleton)
             if not searchable_text.strip():
                 searchable_text = str(skeleton.get("original_query", ""))
