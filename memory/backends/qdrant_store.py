@@ -6,6 +6,7 @@ Phase C: Sparse vectors (text-bm25) for hybrid search via FastEmbed SPLADE.
 
 import json
 import re
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -284,13 +285,23 @@ class QdrantVectorStore:
         else:
             vec_data = embedding_list
         point = PointStruct(id=memory_id, vector=vec_data, payload=payload)
+        t0 = time.perf_counter()
         self.client.upsert(collection_name=self.collection_name, points=[point])
+        upsert_ms = (time.perf_counter() - t0) * 1000
         log_step(f"💾 Added memory: {memory_id[:8]}... ({len(text)} chars)", symbol="📝")
 
         # Neo4j knowledge graph ingestion (if enabled). Skip when add comes from session pipeline;
         # session extraction is ingested via ingest_from_unified_extraction (entities from full context).
+        kg_ms = 0.0
         if not skip_kg_ingest:
+            t1 = time.perf_counter()
             self._ingest_to_knowledge_graph(memory_id, text, payload)
+            kg_ms = (time.perf_counter() - t1) * 1000
+        total_ms = (time.perf_counter() - t0) * 1000
+        log_step(
+            f"⏱ realtime_index: upsert={upsert_ms:.1f}ms | kg={kg_ms:.1f}ms | total={total_ms:.1f}ms",
+            symbol="⏱",
+        )
 
         return {"id": memory_id, **payload}
 
