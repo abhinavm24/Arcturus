@@ -110,6 +110,15 @@ export const api = {
         return res.data;
     },
 
+    /** Phase E 4.2: Suggest a space for the given memory text (optional current space). User can override. */
+    recommendSpace: async (text: string, current_space_id?: string | null): Promise<{ recommended_space_id: string; reason?: string }> => {
+        const params: Record<string, string> = {};
+        if (text.trim()) params.text = text.trim();
+        if (current_space_id) params.current_space_id = current_space_id;
+        const res = await axios.get<{ recommended_space_id: string; reason?: string }>(`${API_BASE}/remme/recommend-space`, { params });
+        return res.data;
+    },
+
     // Get specific run graph
     // Get specific run graph
     getRunGraph: async (runId: string): Promise<{ nodes: PlatformNode[], edges: PlatformEdge[], graph: any }> => {

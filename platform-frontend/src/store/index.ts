@@ -238,6 +238,8 @@ interface RemmeSlice {
     addMemory: (text: string, category?: string, space_id?: string | null) => Promise<void>;
     deleteMemory: (id: string) => Promise<void>;
     cleanupDanglingMemories: () => Promise<void>;
+    /** Phase E 4.2: Suggest space for memory text (optional current space). */
+    recommendSpace: (text: string, current_space_id?: string | null) => Promise<{ recommended_space_id: string; reason?: string }>;
 }
 
 // Phase 4: Spaces (Perplexity-style project hubs)
@@ -1603,6 +1605,9 @@ export const useAppStore = create<AppState>()(
                 } catch (e) {
                     console.error("Failed to cleanup dangling memories", e);
                 }
+            },
+            recommendSpace: async (text, current_space_id) => {
+                return api.recommendSpace(text, current_space_id);
             },
 
             // --- Spaces Slice (Phase 4) ---

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { useAppStore } from '@/store';
 import { Search, Brain, Trash2, Plus, AlertCircle, TriangleAlert, Settings2, Monitor, Shield, Code2, Terminal, Heart, Zap, Utensils, Music, Film, BookOpen, Briefcase, Sparkles, RefreshCw, Coffee, Dog, Palette, MessageSquare, Globe, PawPrint, ListTree, GitPullRequest, FolderOpen } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -78,12 +78,13 @@ export const RemmePanel: React.FC = () => {
 // ============================================================================
 
 const SnippetsView: React.FC = () => {
-    const { memories, fetchMemories, addMemory, deleteMemory, cleanupDanglingMemories, isRemmeAddOpen: isAddOpen, setIsRemmeAddOpen: setIsAddOpen, spaces, currentSpaceId, fetchSpaces, setIsSpacesModalOpen } = useAppStore();
+    const { memories, fetchMemories, addMemory, deleteMemory, cleanupDanglingMemories, isRemmeAddOpen: isAddOpen, setIsRemmeAddOpen: setIsAddOpen, spaces, currentSpaceId, fetchSpaces, setIsSpacesModalOpen, recommendSpace } = useAppStore();
     const [searchQuery, setSearchQuery] = useState("");
     const [expandedMemoryId, setExpandedMemoryId] = useState<string | null>(null);
     const [newMemoryText, setNewMemoryText] = useState("");
     const [memorySpaceId, setMemorySpaceId] = useState<string | null>(null);
     const [isAdding, setIsAdding] = useState(false);
+    const recommendDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     useEffect(() => {
         fetchMemories();
@@ -95,6 +96,23 @@ const SnippetsView: React.FC = () => {
             fetchSpaces();
         }
     }, [isAddOpen, currentSpaceId, fetchSpaces]);
+
+    // Phase E 4.2: Auto-recommend space as user types (debounced). Improves UX without auto-organization.
+    useEffect(() => {
+        if (!isAddOpen || !newMemoryText.trim()) return;
+        if (recommendDebounceRef.current) clearTimeout(recommendDebounceRef.current);
+        recommendDebounceRef.current = setTimeout(() => {
+            recommendDebounceRef.current = null;
+            recommendSpace(newMemoryText.trim(), currentSpaceId)
+                .then(({ recommended_space_id }) => {
+                    setMemorySpaceId(recommended_space_id === '__global__' ? null : recommended_space_id);
+                })
+                .catch(() => {});
+        }, 500);
+        return () => {
+            if (recommendDebounceRef.current) clearTimeout(recommendDebounceRef.current);
+        };
+    }, [isAddOpen, newMemoryText, currentSpaceId, recommendSpace]);
 
     const currentSpaceName = currentSpaceId
         ? spaces.find((s) => s.space_id === currentSpaceId)?.name || 'Space'

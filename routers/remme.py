@@ -449,6 +449,51 @@ async def add_memory(request: AddMemoryRequest, background_tasks: BackgroundTask
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/recommend-space")
+async def recommend_space(
+    text: str | None = Query(None, description="Memory text to base recommendation on"),
+    current_space_id: str | None = Query(None, description="Current space context (e.g. selected space); can be used as fallback"),
+):
+    """
+    Phase E 4.2: Auto-recommend space for adding a memory. Improves UX without auto-organization.
+    Returns a suggested space_id based on semantic similarity of the text to existing memories per space.
+    User can always override in the UI.
+    """
+    try:
+        from memory.space_constants import SPACE_ID_GLOBAL
+
+        # No text or very short: suggest current context or global
+        if not (text and text.strip()):
+            out = current_space_id if current_space_id and current_space_id != SPACE_ID_GLOBAL else SPACE_ID_GLOBAL
+            return {"recommended_space_id": out, "reason": "current_or_global"}
+
+        # Search user's memories (no space filter) by semantic similarity to the draft text
+        emb = get_embedding(text.strip(), task_type="search_query")
+        results = remme_store.search(
+            query_vector=emb,
+            query_text=text.strip(),
+            k=15,
+            filter_metadata=None,
+        )
+        if not results:
+            out = current_space_id if current_space_id and current_space_id != SPACE_ID_GLOBAL else SPACE_ID_GLOBAL
+            return {"recommended_space_id": out, "reason": "no_memories"}
+
+        # Recommend the space that appears most often in top results (or top result's space)
+        from collections import Counter
+        space_counts: Counter = Counter()
+        for r in results:
+            sid = r.get("space_id") or SPACE_ID_GLOBAL
+            space_counts[sid] += 1
+        if space_counts:
+            recommended = space_counts.most_common(1)[0][0]
+            return {"recommended_space_id": recommended, "reason": "similar_memories"}
+        out = current_space_id if current_space_id and current_space_id != SPACE_ID_GLOBAL else SPACE_ID_GLOBAL
+        return {"recommended_space_id": out, "reason": "current_or_global"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.delete("/memories/{memory_id}")
 async def delete_memory(memory_id: str):
     """Delete a memory"""
