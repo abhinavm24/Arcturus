@@ -30,8 +30,8 @@ Update **§2 Status at a glance** and **§8 Remaining / next steps** as work pro
 | **Preferences unification** | ✅ Done | Fact/Evidence, adapter, migration; backend ready for UI edits |
 | **Phase 3: Spaces & Collections** | ✅ Done | Spaces UI: panel, create/list/select spaces; runs & memories by space; see §4.2 |
 | **Neo4j Fact space_id (global sentinel)** | ✅ Done | `SPACE_ID_GLOBAL` instead of null; upsert_fact, merge_list_fact, create_evidence, get_facts_for_user |
-| **Session-level extraction** | ⏳ Deferred | One pass for memories + preferences + entities from session; see §8.2 |
-| **Retrieval scoping by space** | ⏳ Future | List/filter done; full retrieval scoping deferred; see §8.4 |
+| **Session-level extraction** | ✅ Done | Unified extractor: extract_from_session → memories + preferences + entities in one shot; ingest_from_unified_extraction; runs.py/remme.py use it |
+| **Retrieval scoping by space** | ✅ Done | memory_retriever space_id/space_ids; Qdrant + Neo4j filters; no global injection when run in a space; see §8.4 |
 | **Phase 4: Sync Engine** | ✅ Core done | CRDT-based sync (LWW), push/pull API, selective sync; see §8.5 |
 | **Shared Space (new step)** | ✅ Implemented | sync_policy "shared"; space templates (Computer Only, Personal, Workspace, Custom, More Templates… e.g. Startup Research, Home Renovation); shared spaces (share by user_id, SHARED_WITH); no global injection when run in a space; see §8.8a |
 | **Login / register (Phase 5 first)** | ✅ Done | Register, login, guest vs logged-in; migration API; auth token with requests; see §8.8 |
@@ -43,7 +43,7 @@ Update **§2 Status at a glance** and **§8 Remaining / next steps** as work pro
 | **Phase E (4.2 Auto-recommend space)** | ✅ Done | GET /remme/recommend-space; RemmePanel debounced space suggestion in Add Memory; see §4.4 |
 | **Global space memories fix** | ✅ Done | get_all(space_id=__global__) returns points with space_id==__global__ OR empty (legacy); tenant-scoped; see §4.4 |
 | **UI edit (frontend)** | ⏳ Deferred (post Phase 5) | Backend ready; frontend deferred; see §8.9 |
-| **Entity-friendly Qdrant payload** | ⏳ Optional | §8.1 — beyond `entity_ids` + optional `entity_labels` |
+| **Entity-friendly Qdrant payload** | ✅ Done | entity_ids + entity_labels indexed; qdrant_store writes both; indexed in qdrant_config.yaml |
 | **Expansion depth** | ⏳ Future | One-hop only; `depth` parameter reserved for multi-hop |
 | **user_id: FE ownership** | ✅ Done | Frontend/context; backend accepts JWT/X-User-Id; file fallback gated; see §8.7 |
 
@@ -62,7 +62,7 @@ Update **§2 Status at a glance** and **§8 Remaining / next steps** as work pro
 - **Phase 1:** FAISS → Qdrant (cloud-capable vector store). **Done.**
 - **Phase 2/3:** Neo4j knowledge graph (entities, relationships, dual-path retrieval). **Core done.**
 - **Phase 2.5:** Unified extractor with registry-owned fact identity (field_id). **Done.**
-- **Phase 3:** Spaces & Collections (Perplexity-style project hubs). **Done.** Create/list/select spaces; runs and memories filtered by space. Retrieval scoping by space deferred. Session-level extraction deferred.
+- **Phase 3:** Spaces & Collections (Perplexity-style project hubs). **Done.** Create/list/select spaces; runs and memories filtered by space; retrieval scoping by space implemented; session-level extraction implemented.
 - **Phase 4:** **Sync Engine** — Cross-device sync (CRDT-based), conflict resolution, selective sync. **Done.** See §8.5.
 - **Phase 5:** **Lifecycle Manager** — Importance, archival, contradiction, visibility, user_id from context. **Core done.** UI edit frontend deferred to post–Phase 5 (backend ready). See §8.8.
 
@@ -358,7 +358,7 @@ Use this section as the single list of what to do next; update as you complete i
 
 **Step 5 (Migration):** Done. `scripts/migrate_hubs_to_neo4j.py` loads `preferences_hub.json`, `operating_context_hub.json`, `soft_identity_hub.json` from `memory/user_model/`, maps hub fields to Fact `(namespace, key, value)` with `source_mode=migration`, upserts Facts and creates Evidence nodes. Usage: `uv run python scripts/migrate_hubs_to_neo4j.py` or `--dry-run`. Null/empty values skipped. Add to §9.3 migrations list as needed.
 
-**Step 6 (Spaces):** Done (Phase 3). Spaces & Collections UI, create/list/select spaces; runs and memories filtered by space; Fact uses `SPACE_ID_GLOBAL` for global scope. Full retrieval scoping by space deferred; see §8.4.
+**Step 6 (Spaces):** Done (Phase 3). Spaces & Collections UI, create/list/select spaces; runs and memories filtered by space; Fact uses `SPACE_ID_GLOBAL`; retrieval scoping by space implemented; see §8.4.
 
 **Step 7 (UI edit pipeline):** Backend done. `knowledge_graph.upsert_fact_from_ui()`, `PUT /remme/preferences/facts` with `UpdateFactRequest` (namespace, key, value_type, value/...). **Frontend deferred to post–Phase 5**; see §8.9.
 
@@ -378,17 +378,16 @@ Use this section as the single list of what to do next; update as you complete i
 
 **Order:** Implement Shared Space step before starting Phase 5 Lifecycle Manager. UI edit (frontend) is deferred to post–Phase 5.
 
-### 8.1 Optional: Entity-friendly payload in Qdrant
+### 8.1 Entity-friendly payload in Qdrant — Done
 
-- **Idea:** Store something more readable than raw `entity_ids` in Qdrant (e.g. composite keys like `Person::Jon`, `Company::Google`, or a small list of `{type, name}` objects) so we can do entity-based matching or display without always querying Neo4j.
-- **Status:** Not implemented. Current: `entity_ids` + optional `entity_labels`.
+- **Implemented:** Qdrant payload stores both `entity_ids` (Neo4j link) and `entity_labels` (display/filter without Neo4j round-trip). `qdrant_store._ingest_to_knowledge_graph` writes both; `indexed_payload_fields` in `config/qdrant_config.yaml` includes `entity_labels`.
 - **Practice and tradeoffs:** Keeping only foreign IDs in the vector store is common (single source of truth in the graph). Denormalizing entity names/types into the payload is also common when you need filter-by-entity or hybrid search (e.g. keyword/entity filters in Qdrant) or to avoid a Neo4j round-trip for every read. Tradeoff: payload size and consistency (if an entity is renamed in Neo4j, you’d need to update Qdrant). A practical approach is to store both: `entity_ids` (for Neo4j link) and something like `entity_labels` or `entity_composite_keys` (for display and optional filter/expansion) so reads and entity-first retrieval can work without always hitting Neo4j.
 - **Possible future tweaks (if needed):** Tune k, top_for_context, fuzzy_threshold; or add entity labels to Qdrant for filter/display without Neo4j round-trip.
 
-### 8.2 Session-level extraction
+### 8.2 Session-level extraction — Done
 
-- **Current limitation:** Session summaries are used to extract memories (and preferences) via the existing extractor. Those memories are then stored in Qdrant and, on add, we run entity extraction on the **memory text only**. So we can lose entities and relationships that existed in the full session but were compressed or dropped when the memory snippet was written.
-- **Target (single session-level extraction):** Update the extractor (and its output schema) so that when processing a **session summary** (or full session), it produces in one shot: (1) **Memories** (as today: add/update/delete commands or text snippets), (2) **Preferences** (as today: key-value or structured for hubs), (3) **Entities and relationships** (same structure as current entity extractor: entities, entity_relationships, user_facts). One JSON structure from the extractor that includes all three. The ingestion pipeline then writes memories to Qdrant (and Neo4j: Memory, Session, User, entities, relationships, user_facts) using that single extraction result, so entities are derived from the **full session context**, not from the shortened memory text.
+- **Implemented:** Unified extractor (`unified_extractor.py`) produces in one shot from session: memories + preferences (facts) + entities + relationships. `extract_from_session` called from runs.py and remme.py; `kg.ingest_from_unified_extraction()` writes to Neo4j. Direct memory add uses `extract_from_memory_text`.
+- *(Design goals above achieved.)* (as today: add/update/delete commands or text snippets), (2) **Preferences** (as today: key-value or structured for hubs), (3) **Entities and relationships** (same structure as current entity extractor: entities, entity_relationships, user_facts). One JSON structure from the extractor that includes all three. The ingestion pipeline then writes memories to Qdrant (and Neo4j: Memory, Session, User, entities, relationships, user_facts) using that single extraction result, so entities are derived from the **full session context**, not from the shortened memory text.
 - **Manual memory add stays separate:** When the user adds a memory directly from the UI, we only have that single text. Keep the current flow: add to Qdrant → run entity extraction on that text → write to Neo4j and update Qdrant. No change to that path; only the **session-based** path becomes “one extraction, memories + preferences + entities.”
 - **Extractor change:** The remme extractor (or a unified extraction prompt/skill) would need an updated JSON schema that includes both the existing memory commands and preferences and the new entities/entity_relationships/user_facts. Downstream: same Neo4j ingestion, same Qdrant payload updates; preferences can still be written to staging/hubs as today.
 
@@ -399,17 +398,14 @@ Use this section as the single list of what to do next; update as you complete i
 - **UI and existing consumers:** Keep the current UX “more or less” the same by adding an **adapter or service layer** that reads from Qdrant/Neo4j (and optionally from existing JSON for backward compatibility) and exposes the same or similar structure that the UI and hubs expect (e.g. same categories, same field names). Over time, the UI can be pointed only at the new store.
 - **Extraction pipeline:** As in 8.2, the session-level extractor would output memories, preferences, and entities; the ingestion path would write preferences into the new store (and optionally still to JSON for a transition period). This may require mapping current hub schema (e.g. dietary_style, verbosity) to entities/concepts and user_facts (e.g. PREFERS → Concept "vegetarian") so that both the graph and the UI stay consistent.
 
-### 8.4 Space / space_id — Phase 3 delivered; retrieval scoping deferred
+### 8.4 Space / space_id — Phase 3 delivered; retrieval scoping implemented
 
 - **Delivered (Phase 3 — Spaces & Collections):**
   - **Space node + Session–IN_SPACE→Space:** `create_space()`, `get_space_for_session()`, `get_or_create_session(run_id, space_id)`; `_ensure_schema` creates dummy Session+Space with IN_SPACE so Neo4j type exists.
   - **Fact space_id:** Uses `SPACE_ID_GLOBAL = "__global__"` instead of null (Neo4j 5 rejects null in MERGE). `upsert_fact`, `merge_list_fact`, `create_evidence`, `get_facts_for_user` updated; `upsert_fact_from_ui` passes `space_id` to `create_evidence`.
   - **Backend APIs:** `POST /remme/spaces`, `GET /remme/spaces`, `GET /remme/memories?space_id=`, `POST /remme/add` and `POST /runs` accept `space_id`; `list_runs` enriches with `space_id` from Neo4j.
   - **Frontend:** SpacesPanel, create/list/select spaces; runs filtered by currentSpaceId; memories fetched by space; Add Memory and New Run dialogs include space selector.
-- **Deferred (retrieval scoping):** When running a query inside a space, retrieval (memory_retriever) does not yet constrain to memories in that space. Options when implementing:
-  - **Option A:** Constrain all retrieval paths (entities for user, expand, resolve) to memories in the requested space(s) via `space_id` or `IN_SPACE`.
-  - **Option B:** Add `space_id` to Qdrant payload and filter vector search; constrain Neo4j paths similarly.
-- **Where to add the hook:** In `memory/knowledge_graph.py`, reads that traverse memories (e.g. `expand_from_entities`, `get_memory_ids_for_entity_names`) should accept optional `space_id`/`space_ids` and constrain to memories in that space. `memory_retriever.retrieve()` would accept optional `space_id` and pass through to Qdrant filter and Neo4j.
+- **Retrieval scoping (implemented):** `memory_retriever.retrieve()` accepts `space_id` and `space_ids`; when run is in a non-global space, filters Qdrant (`space_ids` in filter) and Neo4j (`space_ids` in `expand_from_entities`, `get_memory_ids_for_entity_names`). No global memories injected when `space_id` is set and ≠ `__global__`. See §8.8a.
 
 ### 8.5 Phase 4: Sync Engine (implemented)
 
