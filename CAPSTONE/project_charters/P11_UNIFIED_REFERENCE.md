@@ -1,6 +1,6 @@
 # P11 Mnemo — Unified Project Reference
 
-**Use this file** when starting a new chat or when you need full context: it combines the project charter, delivery scope, Neo4j knowledge graph design, unified extraction design, and current implementation status in **one self-contained place**. All details are inlined here. For future phases (Phase 3 = Spaces ✅, Phase 4 = Sync Engine, Phase 5 = Lifecycle Manager), **attach only this file** — no need for `p11_unified_extraction_design.md` or other design docs.
+**Use this file** when starting a new chat or when you need full context: it combines the project charter, delivery scope, Neo4j knowledge graph design, unified extraction design, and current implementation status in **one self-contained place**. All details are inlined here. For future phases (Phase 3 = Spaces ✅, Phase 4 = Sync Engine ✅, Phase 5 = Auth, Lifecycle, Shared Space, Phase 5A–5E ✅), **attach only this file** — no need for `p11_unified_extraction_design.md` or other design docs.
 
 Update **§2 Status at a glance** and **§8 Remaining / next steps** as work progresses.
 
@@ -35,12 +35,12 @@ Update **§2 Status at a glance** and **§8 Remaining / next steps** as work pro
 | **Phase 4: Sync Engine** | ✅ Core done | CRDT-based sync (LWW), push/pull API, selective sync; see §8.5 |
 | **Shared Space (new step)** | ✅ Implemented | sync_policy "shared"; space templates (Computer Only, Personal, Workspace, Custom, More Templates… e.g. Startup Research, Home Renovation); shared spaces (share by user_id, SHARED_WITH); no global injection when run in a space; see §8.8a |
 | **Login / register (Phase 5 first)** | ✅ Done | Register, login, guest vs logged-in; migration API; auth token with requests; see §8.8 |
-| **Phase 5: Lifecycle Manager** | ✅ Core done | Importance, archival, contradiction; visibility; see §8.8. UI edit frontend deferred. |
-| **Phase A (RAG/Memories scope)** | ✅ Done | Migrations set user_id + space_id (e.g. __global__); migrate_rag_faiss_to_qdrant, migrate_faiss_to_qdrant support --space-id / MIGRATION_SPACE_ID |
-| **Phase B (Episodic + Notes)** | ✅ Done | Episodic in Qdrant (arcturus_episodic) with space_id; EPISODIC_STORE_PROVIDER (qdrant \| legacy); Notes RAG path-derived space_id; see §4.4 |
-| **Phase C (BM25 → Qdrant, hybrid)** | ✅ Done | Sparse vectors (text-bm25), FastEmbed, prefetch + RRF; design P11_PHASEC_BM25_HYBRID_SEARCH_DESIGN.md; see §4.4 |
-| **Phase D (3.3 Real-time indexing)** | ✅ Done | Timing in add() (upsert/kg/total ms); scripts/benchmark_realtime_indexing.py for ~100 ms target; see §4.4 |
-| **Phase E (4.2 Auto-recommend space)** | ✅ Done | GET /remme/recommend-space; RemmePanel debounced space suggestion in Add Memory; see §4.4 |
+| **Phase 5: Auth, Lifecycle, Shared Space** | ✅ Done | Login/register, Lifecycle Manager, user_id FE ownership, Shared Space & templates; see §8.8. Phase 5A–5E below. UI edit frontend deferred. |
+| **Phase 5A (RAG/Memories scope)** | ✅ Done | Migrations set user_id + space_id (e.g. __global__); migrate_rag_faiss_to_qdrant, migrate_faiss_to_qdrant support --space-id / MIGRATION_SPACE_ID |
+| **Phase 5B (Episodic + Notes)** | ✅ Done | Episodic in Qdrant (arcturus_episodic) with space_id; EPISODIC_STORE_PROVIDER (qdrant \| legacy); Notes RAG path-derived space_id; see §4.4 |
+| **Phase 5C (BM25 → Qdrant, hybrid)** | ✅ Done | Sparse vectors (text-bm25), FastEmbed, prefetch + RRF; design P11_PHASEC_BM25_HYBRID_SEARCH_DESIGN.md; see §4.4 |
+| **Phase 5D (3.3 Real-time indexing)** | ✅ Done | Timing in add() (upsert/kg/total ms); scripts/benchmark_realtime_indexing.py for ~100 ms target; see §4.4 |
+| **Phase 5E (4.2 Auto-recommend space)** | ✅ Done | GET /remme/recommend-space; RemmePanel debounced space suggestion in Add Memory; see §4.4 |
 | **Global space memories fix** | ✅ Done | get_all(space_id=__global__) returns points with space_id==__global__ OR empty (legacy); tenant-scoped; see §4.4 |
 | **UI edit (frontend)** | ⏳ Deferred (post Phase 5) | Backend ready; frontend deferred; see §8.9 |
 | **Entity-friendly Qdrant payload** | ✅ Done | entity_ids + entity_labels indexed; qdrant_store writes both; indexed in qdrant_config.yaml |
@@ -64,7 +64,7 @@ Update **§2 Status at a glance** and **§8 Remaining / next steps** as work pro
 - **Phase 2.5:** Unified extractor with registry-owned fact identity (field_id). **Done.**
 - **Phase 3:** Spaces & Collections (Perplexity-style project hubs). **Done.** Create/list/select spaces; runs and memories filtered by space; retrieval scoping by space implemented; session-level extraction implemented.
 - **Phase 4:** **Sync Engine** — Cross-device sync (CRDT-based), conflict resolution, selective sync. **Done.** See §8.5.
-- **Phase 5:** **Lifecycle Manager** — Importance, archival, contradiction, visibility, user_id from context. **Core done.** UI edit frontend deferred to post–Phase 5 (backend ready). See §8.8.
+- **Phase 5:** **Auth, Lifecycle, Shared Space & Phase 5A–5E** — Login/register, JWT, guest flow; Lifecycle Manager; user_id FE ownership; Shared Space & templates; RAG scope (5A); Episodic+Notes (5B); BM25 hybrid (5C); Real-time indexing (5D); Auto-recommend space (5E). **Done.** UI edit frontend deferred (backend ready). See §8.8.
 
 **Current systems (pre-Mnemo):**
 
@@ -135,21 +135,21 @@ Update **§2 Status at a glance** and **§8 Remaining / next steps** as work pro
 
 - Session-level extraction (§8.2); **UI edit frontend** deferred to post–Phase 5 (§8.9). Phase 4 Sync Engine and Phase 5 Lifecycle core are implemented; see §2 and §4.4.
 
-### 4.4 Phase A–E and defect fix (delivered)
+### 4.4 Phase 5A–5E and defect fix (delivered)
 
-**Phase A (RAG/Memories scope)**  
+**Phase 5A (RAG/Memories scope)**  
 - Migration scripts set `user_id` and `space_id` on migrated memories and RAG chunks. `migrate_rag_faiss_to_qdrant.py` and `migrate_faiss_to_qdrant.py` support `--space-id` / `MIGRATION_SPACE_ID` (default `__global__`).
 
-**Phase B (Episodic + Notes)**  
+**Phase 5B (Episodic + Notes)**  
 - **Episodic:** Qdrant collection `arcturus_episodic` with `user_id`, `space_id`; `search_episodes`, `get_recent_episodes`; sync engine builds episodic deltas when provider is qdrant. **Legacy:** `EPISODIC_STORE_PROVIDER=legacy` reads/writes `memory/episodic_skeletons/skeleton_*.json`; sync engine applies episodic changes to local JSON when legacy. **Notes:** RAG with path-derived `space_id`; follows `RAG_VECTOR_STORE_PROVIDER`.
 
-**Phase C (BM25 → Qdrant, hybrid search)**  
+**Phase 5C (BM25 → Qdrant, hybrid search)**  
 - Sparse vectors (e.g. `text-bm25`) for memories and RAG; client-side FastEmbed (BM25-style; SPLADE optional); Qdrant prefetch + RRF fusion. Config: `config/qdrant_config.yaml` `sparse_vectors` per collection. Design: `P11_PHASEC_BM25_HYBRID_SEARCH_DESIGN.md`.
 
-**Phase D (3.3 Real-time indexing verification)**  
+**Phase 5D (3.3 Real-time indexing verification)**  
 - Timing in `qdrant_store.add()`: logs `upsert_ms`, `kg_ms`, `total_ms`. `scripts/benchmark_realtime_indexing.py` validates memory available for vector search within ~100 ms (add with `skip_kg_ingest=True`), verifies search returns new memory, optional full add+KG timing.
 
-**Phase E (4.2 Auto-recommend space)**  
+**Phase 5E (4.2 Auto-recommend space)**  
 - **Backend:** `GET /remme/recommend-space?text=&current_space_id=` — suggests `space_id` from semantic similarity of draft text to existing memories (most frequent space in top-k). Suggestion only; no auto-organization.  
 - **Frontend:** Add Memory (RemmePanel) calls `recommendSpace(text, currentSpaceId)` debounced (500 ms); space selector updates to suggested space; user can override.
 
@@ -453,7 +453,7 @@ Use this section as the single list of what to do next; update as you complete i
 - **Target:** Move user_id generation and caching to the frontend. FE persists stable user id (localStorage/cookie) and sends with each request. Backend uses as opaque tenant key only.
 - **Scope:** Contract (header/body for `user_id`); FE owns generation; backend accepts client-provided `user_id` only.
 
-### 8.8 Phase 5: Lifecycle Manager (goal + consolidated remaining work)
+### 8.8 Phase 5: Auth, Lifecycle, Shared Space (delivered)
 
 **Original goal (from P11_EXPLANATION):** Smart Memory Management — memories have importance scores and lifecycle; contradiction resolution; privacy controls.
 
@@ -553,6 +553,7 @@ Items deferred from Phase 3 Spaces or from Phase 5; to consider after Phase 5. *
 - **Phase 2/3:** `NEO4J_ENABLED` (true|false), `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD`
 - **P11 Mnemo unified path:** `MNEMO_ENABLED` (true|false). When true: unified extractor, Neo4j Fact/Evidence (step 3), adapter for preferences (step 4). When false: legacy RemMe extractor, normalizer, JSON hubs.
 - **Phase 4 Sync Engine:** `SYNC_ENGINE_ENABLED` (true|false), `SYNC_SERVER_URL` (e.g. http://localhost:8000/api), `DEVICE_ID` (optional; auto-generated and cached if not set).
+- **Async KG ingest:** `ASYNC_KG_INGEST` (true|false) — when true, run KG entity extraction in background after Qdrant upsert.
 
 ### 9.3 Demo and migrations
 
@@ -584,10 +585,10 @@ Items deferred from Phase 3 Spaces or from Phase 5; to consider after Phase 5. *
 | Space constants | `memory/space_constants.py` — SPACE_ID_GLOBAL |
 | Qdrant config | `config/qdrant_config.yaml`; loader: `memory/qdrant_config.py` |
 | Spaces API (Phase 3) | `routers/remme.py` — POST/GET /remme/spaces; GET /remme/memories?space_id= |
-| Recommend space (Phase E) | `routers/remme.py` — GET /remme/recommend-space?text=&current_space_id= |
+| Recommend space (Phase 5E) | `routers/remme.py` — GET /remme/recommend-space?text=&current_space_id= |
 | Sync Engine (Phase 4) | `memory/sync/` — SyncEngine, get_sync_engine; `routers/sync.py` — /api/sync/push, pull, trigger |
-| Real-time indexing benchmark (Phase D) | `scripts/benchmark_realtime_indexing.py` — validates ~100 ms time-to-searchable |
+| Real-time indexing benchmark (Phase 5D) | `scripts/benchmark_realtime_indexing.py` — validates ~100 ms time-to-searchable |
 | Delivery checklist (fixed) | `CAPSTONE/project_charters/P11_DELIVERY_README.md` |
 | Setup (Qdrant, Neo4j) | `CAPSTONE/project_charters/P11_mnemo_SETUP_GUIDE.md` |
 
-**Continue in a new chat:** Attach this file only and say: *"Continue from P11_UNIFIED_REFERENCE.md"* or *"Implement [Phase 4 Sync Engine] from §8.5"* or *"Implement [Phase 5 Lifecycle Manager] from §8.8."*
+**Continue in a new chat:** Attach this file only and say: *"Continue from P11_UNIFIED_REFERENCE.md"* or *"Implement [Phase 4 Sync Engine] from §8.5"* or *"Implement [Phase 5 items] from §8.8."*

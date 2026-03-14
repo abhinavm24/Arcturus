@@ -12,6 +12,8 @@
 
 **Phase 4: Sync Engine** — CRDT-style LWW sync, push/pull API, selective sync per space, startup and post-write sync trigger, frontend “Keep on this device only,” apply-latency and load tests.
 
+**Phase 5: Auth, Lifecycle, Shared Space & Phase 5A–E** — Login/register, JWT, guest flow; Lifecycle Manager; user_id FE ownership; Shared Space & templates; RAG/Memories scope (5A); Episodic + Notes (5B); BM25 hybrid search (5C); Real-time indexing (5D); Auto-recommend space (5E).
+
 ### Completed
 
 **Phase 1**
@@ -80,20 +82,26 @@
 - **Tests**: Unit (merge, policy), integration (two devices converge, B pushes A receives, apply-latency &lt;150ms, load three devices + one pull, reconnection second pull idempotent)
 - **Setup**: `P11_mnemo_SETUP_GUIDE.md` — Phase 4 section (one-server vs two-stores, env vars)
 
-**Phase A (RAG/Memories scope)**
+**Phase 5 — Auth, Lifecycle, Shared Space**
+- **Login/register**: `routers/auth.py` — POST `/auth/register`, `/auth/login`; JWT; guest via `X-User-Id`; migration service for guest → registered.
+- **user_id FE ownership**: Frontend generates/persists guest ID (localStorage); sends `X-User-Id`; backend uses auth context (JWT or header); file fallback only for non-request contexts when `VITE_ENABLE_LOCAL_MIGRATION=true`.
+- **Lifecycle Manager** (`memory/lifecycle.py`): Importance scoring, archival heuristics, contradiction resolution; `archived`, `access_count`, `last_accessed_at`.
+- **Shared Space & templates**: sync_policy `shared`; space templates (Computer Only, Personal, Workspace, Custom, More Templates…); shared spaces via `share_space_with`; memory/run context excludes global when in a space.
+
+**Phase 5A (RAG/Memories scope)**
 - Migration scripts set `user_id` and `space_id` on migrated memories and RAG chunks; `migrate_rag_faiss_to_qdrant.py` and `migrate_faiss_to_qdrant.py` support `--space-id` / `MIGRATION_SPACE_ID` (default `__global__`).
 
-**Phase B (Episodic + Notes)**
+**Phase 5B (Episodic + Notes)**
 - **Episodic:** Stored in Qdrant collection `arcturus_episodic` with `user_id`, `space_id`; `search_episodes`, `get_recent_episodes`; sync engine builds episodic deltas when provider is qdrant. **Legacy:** `EPISODIC_STORE_PROVIDER=legacy` reads/writes `memory/episodic_skeletons/skeleton_*.json`; sync engine applies episodic changes to local JSON when legacy.
 - **Notes:** RAG with path-derived `space_id`; Notes under `data/Notes/` indexed with `space_id` (e.g. `__global__` or per-folder). No separate Notes env; follows `RAG_VECTOR_STORE_PROVIDER`.
 
-**Phase C (BM25 → Qdrant, hybrid search)**
+**Phase 5C (BM25 → Qdrant, hybrid search)**
 - Sparse vectors (e.g. `text-bm25`) for memories and RAG; client-side FastEmbed (BM25-style; SPLADE optional); Qdrant prefetch + RRF fusion. Config: `config/qdrant_config.yaml` `sparse_vectors` per collection. Design: `P11_PHASEC_BM25_HYBRID_SEARCH_DESIGN.md`.
 
-**Phase D (3.3 Real-time indexing verification)**
+**Phase 5D (3.3 Real-time indexing verification)**
 - Timing in `qdrant_store.add()`: logs `upsert_ms`, `kg_ms`, `total_ms` for each add. Benchmark: `scripts/benchmark_realtime_indexing.py` — validates memory available for vector search within ~100 ms (add with `skip_kg_ingest=True`), verifies search returns new memory, optional full add+KG timing.
 
-**Phase E (4.2 Auto-recommend space)**
+**Phase 5E (4.2 Auto-recommend space)**
 - **Backend:** `GET /remme/recommend-space?text=&current_space_id=` — suggests `space_id` from semantic similarity of draft text to existing memories per space (most frequent space in top-k results). No auto-organization; suggestion only.
 - **Frontend:** Add Memory (RemmePanel) calls `recommendSpace(text, currentSpaceId)` debounced (500 ms); space selector updates to suggested space; user can override.
 
@@ -107,7 +115,7 @@
 
 ### Remaining
 
-**Original delivery goal:** All items from the original P11 Mnemo scope (Phases 1–4, 3.5, Phase A–E) are delivered. Nothing from the original goal remains.
+**Original delivery goal:** All items from the original P11 Mnemo scope (Phases 1–5, 3.5, Phase 5A–5E) are delivered. Nothing from the original goal remains.
 
 **Defects and hardening**
 - **Sync auth:** Addressed. Push/pull use `get_current_user_id()` from auth context (JWT/X-User-Id); body `user_id` is ignored. Prevents cross-tenant data access.
@@ -116,7 +124,6 @@
 - **Async KG ingestion:** When `ASYNC_KG_INGEST=true`, KG entity extraction runs in a background thread after Qdrant upsert. Add returns immediately; graph lags slightly. Env: `ASYNC_KG_INGEST` (default false).
 
 **Future / optional (not part of original delivery)**
-- **Phase 5 (already partially done in codebase):** Login/register, Lifecycle Manager (importance, archival, contradiction), user_id FE ownership, UI edit for preferences/facts. See P11_UNIFIED_REFERENCE.md §8.8.
 - **Session-level extraction:** Single pass for memories + preferences + entities from session (§8.2).
 - **Retrieval scoping by space:** List/filter done; full retrieval constrained by space implemented in codebase; verify end-to-end.
 - **Frontend:** Graph explorer, spaces manager (beyond current panel/modal).
@@ -213,7 +220,7 @@ Memory retrieval (runs.py → memory_retriever.retrieve)
 ### Frontend
 - **Spaces UI (Phase 3)**: SpacesPanel, SpacesModal; create/list/select spaces; space selector in New Run and Add Memory; `currentSpaceId` persisted; runs and memories filtered by selected space.
 - **Phase 4**: Create Space dialog includes “Keep on this device only (don’t sync to cloud)” checkbox; `api.createSpace(name, description?, sync_policy?)`; store passes `sync_policy` to API.
-- **Next (Phase 5)**: Login/register UI, preferences/facts edit UI, user_id from frontend when logged in.
+- **Phase 5 done**: Login/register UI, auth slice, user_id from frontend. UI edit for preferences/facts: backend-ready, frontend deferred.
 
 ## 4. Mandatory Test Gate Definition
 - Acceptance file: `tests/acceptance/p11_mnemo/test_memory_influences_planner_output.py`
@@ -277,8 +284,8 @@ uv run pytest tests/integration/test_sync_two_devices_converge.py -v -m slow
 - **Qdrant Cloud**: Uses API key authentication; ensure keys are scoped and rotated as needed
 
 ## 8. Known Gaps
-- See **Remaining** (above) for future/optional work (Phase 5 UI edit, session-level extraction, graph explorer, etc.). Retrieval P95 benchmark and guest user_id stability: done.
-- **Phase 5:** Login/register and Lifecycle (importance, archival, contradiction) are implemented in codebase; UI edit for preferences/facts is backend-ready, frontend deferred. See P11_UNIFIED_REFERENCE.md §8.8.
+- See **Remaining** (above) for future/optional work (UI edit for preferences/facts, session-level extraction, graph explorer, etc.). Retrieval P95 benchmark and guest user_id stability: done.
+- **Phase 5:** Completed. Login/register, Lifecycle, user_id FE ownership, Shared Space, Phase 5A–E delivered. UI edit for preferences/facts is backend-ready, frontend deferred.
 - **Sync auth:** Addressed (user_id from auth context, not body).
 - **Guest user_id stability:** Addressed (FE ownership, X-User-Id, legacy-guest-id for migration).
 - **Graph expansion depth:** One-hop only; `depth` reserved for multi-hop. Entity-friendly payload beyond `entity_ids`/`entity_labels` optional.
