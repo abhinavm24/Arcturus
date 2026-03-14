@@ -83,6 +83,7 @@ def plan_slide_sequence(
             sequence.insert(insert_pos, rng.choice(body_types))
 
     sequence = _prevent_consecutive_types(sequence, rng)
+    _ensure_image_slide(sequence, rng)
 
     result = []
     for i, slide_type in enumerate(sequence):
@@ -100,6 +101,32 @@ def plan_slide_sequence(
         })
 
     return result
+
+
+def _ensure_image_slide(sequence: list[str], rng: random.Random) -> None:
+    """Guarantee at least one image_text slide for visual variety.
+
+    If no image slide exists in the sequence, replace a body-position
+    content or two_column slide with image_text.  Mutates in place.
+    """
+    _IMAGE_TYPES = {"image_text", "image_full"}
+    if any(t in _IMAGE_TYPES for t in sequence):
+        return
+
+    # Find replaceable body positions (skip opening at 0 / closing at -1)
+    # Prefer content/two_column; fall back to other generic body types
+    replaceable = [
+        i for i in range(2, len(sequence) - 1)
+        if sequence[i] in ("content", "two_column")
+    ]
+    if not replaceable:
+        replaceable = [
+            i for i in range(1, len(sequence) - 1)
+            if sequence[i] not in ("title", "section_divider", "chart")
+        ]
+    if replaceable:
+        idx = rng.choice(replaceable)
+        sequence[idx] = "image_text"
 
 
 def _prevent_consecutive_types(sequence: list[str], rng: random.Random) -> list[str]:
