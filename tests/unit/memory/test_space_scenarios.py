@@ -93,16 +93,19 @@ class TestMemoryRetrieverSpaceFilter:
     def test_retrieve_with_space_id_global_no_space_filter(self):
         """When space_id is __global__, filter is global-only (space_ids=[__global__])."""
         from unittest.mock import MagicMock, patch
+        import numpy as np
 
         mock_store = MagicMock()
         mock_store.search.return_value = []
+        fake_embedding = np.zeros(384, dtype=np.float32)
 
         with patch("memory.memory_retriever._get_store", return_value=mock_store):
             with patch("memory.memory_retriever._get_user_id", return_value="user1"):
                 with patch("memory.memory_retriever._get_knowledge_graph", return_value=None):
-                    from memory.memory_retriever import retrieve
+                    with patch("remme.utils.get_embedding", return_value=fake_embedding):
+                        from memory.memory_retriever import retrieve
 
-                    _, _ = retrieve("query", space_id=SPACE_ID_GLOBAL)
+                        _, _ = retrieve("query", space_id=SPACE_ID_GLOBAL)
         call_kw = mock_store.search.call_args[1] if mock_store.search.called else {}
         meta = call_kw.get("filter_metadata") or {}
         assert meta.get("space_ids") == [SPACE_ID_GLOBAL]

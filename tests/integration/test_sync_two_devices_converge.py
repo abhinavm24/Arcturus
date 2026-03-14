@@ -339,8 +339,15 @@ class TestSyncTwoDevicesConverge:
         from memory.sync.engine import SyncEngine
 
         user_id = "00000000-0000-0000-0000-000000000001"
-        # Add one memory and push. Mock embedding so no Ollama in CI.
-        with patch("routers.remme.get_embedding", return_value=np.zeros(768, dtype=np.float32)):
+        fake_server_store = _FakeStore()
+        fake_emb = np.zeros(768, dtype=np.float32)
+
+        with (
+            patch("shared.state.get_remme_store", return_value=fake_server_store),
+            patch("routers.remme.remme_store", fake_server_store),
+            patch("remme.utils.get_embedding", return_value=fake_emb),
+            patch("routers.remme.get_embedding", return_value=fake_emb),
+        ):
             add_resp = client.post(
                 "/api/remme/add",
                 json={"text": "Reconnection idempotent test memory.", "category": "general"},
@@ -353,11 +360,7 @@ class TestSyncTwoDevicesConverge:
         def pull_via_client(base_url: str, req: PullRequest, **kwargs):
             return self._make_pull_via_client(client, req)
 
-        try:
-            from shared.state import get_remme_store
-            store_a = get_remme_store()
-        except Exception:
-            pytest.skip("remme store not available")
+        store_a = fake_server_store
         with patch("memory.sync.engine.push_changes", side_effect=push_via_client):
             with patch("memory.sync.engine.pull_changes", side_effect=pull_via_client):
                 engine = SyncEngine(
