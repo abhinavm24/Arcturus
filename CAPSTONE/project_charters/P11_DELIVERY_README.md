@@ -110,7 +110,7 @@
 **Original delivery goal:** All items from the original P11 Mnemo scope (Phases 1–4, 3.5, Phase A–E) are delivered. Nothing from the original goal remains.
 
 **Defects and hardening**
-- **Sync auth:** Sync endpoints accept `user_id` in body with no authentication; should be tied to login/session when multi-tenant.
+- **Sync auth:** Addressed. Push/pull use `get_current_user_id()` from auth context (JWT/X-User-Id); body `user_id` is ignored. Prevents cross-tenant data access.
 - **Guest user_id stability:** Addressed. Frontend owns guest identity: generates/persists `authUserId` (localStorage), sends `X-User-Id` on every request. Backend uses request context (JWT or X-User-Id) for identity; file fallback (`user_id.json`) is only for non-request contexts (scripts, benchmarks) when `VITE_ENABLE_LOCAL_MIGRATION=true`. For local migration, FE fetches `/auth/legacy-guest-id` so migrated memories (BE-initiated) show up.
 - **Retrieval latency:** P95 &lt; 250 ms target — benchmarked via `scripts/benchmark_retrieval.py` (P95 39.8 ms, PASS).
 - **Real-time indexing:** Phase D benchmark exists; if KG ingest dominates latency, consider async KG ingestion so add returns after upsert while KG runs in background.
@@ -276,9 +276,9 @@ uv run pytest tests/integration/test_sync_two_devices_converge.py -v -m slow
 - **Qdrant Cloud**: Uses API key authentication; ensure keys are scoped and rotated as needed
 
 ## 8. Known Gaps
-- See **Remaining** (above) for defects and hardening (sync auth, async KG option) and for future/optional work (Phase 5 UI edit, session-level extraction, graph explorer, etc.). Retrieval P95 benchmark and guest user_id stability: done.
+- See **Remaining** (above) for defects and hardening (async KG option) and for future/optional work (Phase 5 UI edit, session-level extraction, graph explorer, etc.). Retrieval P95 benchmark and guest user_id stability: done.
 - **Phase 5:** Login/register and Lifecycle (importance, archival, contradiction) are implemented in codebase; UI edit for preferences/facts is backend-ready, frontend deferred. See P11_UNIFIED_REFERENCE.md §8.8.
-- **Sync auth:** Sync endpoints accept `user_id` in body with no authentication.
+- **Sync auth:** Addressed (user_id from auth context, not body).
 - **Guest user_id stability:** Addressed (FE ownership, X-User-Id, legacy-guest-id for migration).
 - **Graph expansion depth:** One-hop only; `depth` reserved for multi-hop. Entity-friendly payload beyond `entity_ids`/`entity_labels` optional.
 - **Session-level extraction:** Single pass for memories + preferences + entities from session not yet implemented (§8.2).

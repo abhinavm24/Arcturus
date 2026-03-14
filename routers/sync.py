@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
 
+from core.auth.context import get_current_user_id
 from memory.sync.schema import PullRequest, PullResponse, PushRequest, PushResponse, SyncChange
 from memory.sync_config import is_sync_engine_enabled, get_sync_server_url
 
@@ -213,18 +213,21 @@ def _apply_change_to_store(change: SyncChange, user_id: str) -> None:
 async def sync_push(request: PushRequest) -> PushResponse:
     """
     Receive batch of changes from client. Merge (LWW) into store, append to sync log.
-    Requires SYNC_ENGINE_ENABLED.
+    Requires SYNC_ENGINE_ENABLED. user_id is derived from auth context (JWT/X-User-Id), not body.
     """
     if not is_sync_engine_enabled():
         raise HTTPException(status_code=503, detail="Sync engine not enabled")
+    user_id = get_current_user_id()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required for sync")
     errors = []
     for c in request.changes:
         try:
-            _apply_change_to_store(c, request.user_id)
+            _apply_change_to_store(c, user_id)
         except Exception as e:
             errors.append(str(e))
     changes_dump = [c.model_dump(mode="json") for c in request.changes]
-    last_seq = _append_to_log(request.user_id, changes_dump)
+    last_seq = _append_to_log(user_id, changes_dump)
     cursor = str(last_seq) if request.changes else ""
     return PushResponse(
         accepted=len(errors) == 0,
@@ -261,10 +264,14 @@ async def sync_trigger():
 async def sync_pull(request: PullRequest) -> PullResponse:
     """
     Return changes since cursor from sync log.
+    user_id is derived from auth context (JWT/X-User-Id), not body.
     """
     if not is_sync_engine_enabled():
         raise HTTPException(status_code=503, detail="Sync engine not enabled")
-    entries, _ = _load_log(request.user_id)
+    user_id = get_current_user_id()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required for sync")
+    entries, _ = _load_log(user_id)
     since = 0
     try:
         since = int(request.since_cursor or "0")
