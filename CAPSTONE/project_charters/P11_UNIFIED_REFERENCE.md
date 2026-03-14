@@ -439,7 +439,7 @@ Use this section as the single list of what to do next; update as you complete i
 - **Sync auth:** Addressed. Push/pull derive `user_id` from auth context (JWT/X-User-Id); body `user_id` ignored.
 - **Guest user_id stability:** Addressed. FE owns guest identity (persists `authUserId`, sends X-User-Id); BE file fallback only for non-request contexts when VITE_ENABLE_LOCAL_MIGRATION=true.
 - **Retrieval P95 < 250 ms:** Benchmark implemented via `scripts/benchmark_retrieval.py`; P95 39.8 ms (PASS).
-- **Real-time indexing:** If KG ingest dominates add latency, consider async KG ingestion (return after upsert, run KG in background).
+- **Async KG ingestion:** Implemented. Set `ASYNC_KG_INGEST=true` to run KG in background after upsert (faster add, graph lags slightly).
 
 ### 8.6b Other known gaps (from delivery README)
 

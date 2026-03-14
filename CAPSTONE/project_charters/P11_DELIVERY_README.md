@@ -113,7 +113,7 @@
 - **Sync auth:** Addressed. Push/pull use `get_current_user_id()` from auth context (JWT/X-User-Id); body `user_id` is ignored. Prevents cross-tenant data access.
 - **Guest user_id stability:** Addressed. Frontend owns guest identity: generates/persists `authUserId` (localStorage), sends `X-User-Id` on every request. Backend uses request context (JWT or X-User-Id) for identity; file fallback (`user_id.json`) is only for non-request contexts (scripts, benchmarks) when `VITE_ENABLE_LOCAL_MIGRATION=true`. For local migration, FE fetches `/auth/legacy-guest-id` so migrated memories (BE-initiated) show up.
 - **Retrieval latency:** P95 &lt; 250 ms target — benchmarked via `scripts/benchmark_retrieval.py` (P95 39.8 ms, PASS).
-- **Real-time indexing:** Phase D benchmark exists; if KG ingest dominates latency, consider async KG ingestion so add returns after upsert while KG runs in background.
+- **Async KG ingestion:** When `ASYNC_KG_INGEST=true`, KG entity extraction runs in a background thread after Qdrant upsert. Add returns immediately; graph lags slightly. Env: `ASYNC_KG_INGEST` (default false).
 
 **Future / optional (not part of original delivery)**
 - **Phase 5 (already partially done in codebase):** Login/register, Lifecycle Manager (importance, archival, contradiction), user_id FE ownership, UI edit for preferences/facts. See P11_UNIFIED_REFERENCE.md §8.8.
@@ -204,6 +204,7 @@ Memory retrieval (runs.py → memory_retriever.retrieve)
   - Phase 1: `VECTOR_STORE_PROVIDER` (qdrant|faiss), `QDRANT_URL`, `QDRANT_API_KEY`
   - Phase 2/3: `NEO4J_ENABLED` (true|false), `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD`
   - Phase 2.5/3: `MNEMO_ENABLED` (true|false) — gates unified extractor, Neo4j Fact/Evidence, adapter
+  - `ASYNC_KG_INGEST` (true|false) — when true, run KG entity extraction in background after upsert (faster add)
   - Phase 4: `SYNC_ENGINE_ENABLED` (true|false), `SYNC_SERVER_URL`, optional `DEVICE_ID`
 - **Programmatic**:
   - `from memory.vector_store import get_vector_store; store = get_vector_store(provider="qdrant")`
@@ -276,7 +277,7 @@ uv run pytest tests/integration/test_sync_two_devices_converge.py -v -m slow
 - **Qdrant Cloud**: Uses API key authentication; ensure keys are scoped and rotated as needed
 
 ## 8. Known Gaps
-- See **Remaining** (above) for defects and hardening (async KG option) and for future/optional work (Phase 5 UI edit, session-level extraction, graph explorer, etc.). Retrieval P95 benchmark and guest user_id stability: done.
+- See **Remaining** (above) for future/optional work (Phase 5 UI edit, session-level extraction, graph explorer, etc.). Retrieval P95 benchmark and guest user_id stability: done.
 - **Phase 5:** Login/register and Lifecycle (importance, archival, contradiction) are implemented in codebase; UI edit for preferences/facts is backend-ready, frontend deferred. See P11_UNIFIED_REFERENCE.md §8.8.
 - **Sync auth:** Addressed (user_id from auth context, not body).
 - **Guest user_id stability:** Addressed (FE ownership, X-User-Id, legacy-guest-id for migration).

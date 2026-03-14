@@ -6,6 +6,7 @@ Phase C: Sparse vectors (text-bm25) for hybrid search via FastEmbed SPLADE.
 
 import json
 import re
+import threading
 import time
 import uuid
 from datetime import datetime
@@ -298,11 +299,27 @@ class QdrantVectorStore:
 
         # Neo4j knowledge graph ingestion (if enabled). Skip when add comes from session pipeline;
         # session extraction is ingested via ingest_from_unified_extraction (entities from full context).
+        # When ASYNC_KG_INGEST=true: return after upsert, run KG in background for faster add latency.
         kg_ms = 0.0
         if not skip_kg_ingest:
-            t1 = time.perf_counter()
-            self._ingest_to_knowledge_graph(memory_id, text, payload)
-            kg_ms = (time.perf_counter() - t1) * 1000
+            try:
+                from memory.mnemo_config import is_async_kg_ingest_enabled
+                if is_async_kg_ingest_enabled():
+                    # Fire-and-forget; memory is searchable immediately; KG lags slightly
+                    payload_copy = dict(payload)
+                    thread = threading.Thread(
+                        target=self._ingest_to_knowledge_graph,
+                        args=(memory_id, text, payload_copy),
+                        daemon=True,
+                        name="kg-ingest",
+                    )
+                    thread.start()
+                else:
+                    t1 = time.perf_counter()
+                    self._ingest_to_knowledge_graph(memory_id, text, payload)
+                    kg_ms = (time.perf_counter() - t1) * 1000
+            except ImportError:
+                self._ingest_to_knowledge_graph(memory_id, text, payload)
         total_ms = (time.perf_counter() - t0) * 1000
         log_step(
             f"⏱ realtime_index: upsert={upsert_ms:.1f}ms | kg={kg_ms:.1f}ms | total={total_ms:.1f}ms",
