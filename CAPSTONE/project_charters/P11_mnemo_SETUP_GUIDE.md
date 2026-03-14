@@ -390,6 +390,98 @@ rag_store = get_rag_vector_store(provider="qdrant")  # arcturus_rag_chunks
 | `NEO4J_URI` | Neo4j Bolt URI | `bolt://localhost:7687` |
 | `NEO4J_USER` | Neo4j username | `neo4j` |
 | `NEO4J_PASSWORD` | Neo4j password | (required when `NEO4J_ENABLED=true`) |
+| `SYNC_ENGINE_ENABLED` | Enable Phase 4 sync (push/pull) | `false` |
+| `SYNC_SERVER_URL` | Sync server base URL (API base) | (required when sync enabled) |
+| `DEVICE_ID` | This device ID (optional) | auto-generated and cached |
+
+---
+
+## Phase 4: Testing the Sync Engine
+
+### When does sync actually “replicate” data?
+
+Sync **replicates** data when there are **separate stores** (separate Qdrant/Neo4j instances). Then:
+
+- **Device A** has its own store (e.g. Qdrant at `localhost:6333`). It writes locally and **pushes** changes to the sync server.
+- **Sync server** has its own store (e.g. Qdrant at `localhost:6335`). It receives push and merges into **its** store; on pull it returns changes from its **sync log**.
+- **Device B** has its **own** store (e.g. Qdrant at `localhost:6334`). It **pulls** from the server and **applies** those changes into **B’s store**. Now B has a copy of the data — that’s replication.
+
+If **everyone shares the same Qdrant and Neo4j** (same URLs), there is only **one** logical store. Both “devices” are just two API processes talking to the same databases. Sync does **not** create a second copy in that case; it only:
+
+- Builds a **sync log** (so pull has something to return),
+- Applies **LWW merge** when the server receives push.
+
+So: **same Qdrant/Neo4j = one store, no replication.** Use that setup to **test the sync protocol** (push/pull, trigger, logs). For **real cross-device replication**, each device (or at least “device” vs “server”) must use a **different** Qdrant (and Neo4j if used) so there are separate copies.
+
+---
+
+### 1. One-server setup (single store — protocol testing)
+
+Good for: verifying sync endpoints and that push/pull don’t error. There is still only one store (this app’s Qdrant/Neo4j).
+
+1. Start Qdrant and Neo4j (if you use them), then start the API:
+
+   ```bash
+   uv run uvicorn api:app --host 0.0.0.0 --port 8000
+   ```
+
+2. In `.env`:
+
+   ```bash
+   SYNC_ENGINE_ENABLED=true
+   SYNC_SERVER_URL=http://localhost:8000/api
+   ```
+
+   (No trailing slash on `SYNC_SERVER_URL`.)
+
+3. Restart the API. On startup it runs a background sync (push then pull) against itself. Data stays in the same store; the sync log is populated so the protocol runs.
+
+**What you can do:** Add a memory, call `POST /api/sync/trigger`, call push/pull manually. You’re testing that sync works when **client and server share the same store** (no second copy).
+
+---
+
+### 2. Two separate stores (real replication)
+
+Here you have **two different** Qdrant instances (and optionally two Neo4j) so that “Device B” really gets a **copy** of data when it pulls.
+
+1. **Sync server (central)**  
+   - One API process.  
+   - Its own Qdrant (e.g. port 6333) and Neo4j (e.g. 7687).  
+   - This is the “cloud” store.  
+   - Run it, e.g.: `uv run uvicorn api:app --host 0.0.0.0 --port 8000`  
+   - Do **not** set `SYNC_SERVER_URL` on the server (or set it to its own URL if you want it to self-sync); the server only needs to expose `/api/sync/push` and `/api/sync/pull`.
+
+2. **Device A (e.g. laptop)**  
+   - Another API process.  
+   - **Different** Qdrant (e.g. port 6334) and Neo4j (e.g. 7688), or a local SQLite/FAISS if you add that path.  
+   - `.env`: `SYNC_SERVER_URL=http://<server-host>:8000/api`, `DEVICE_ID=device-a`.  
+   - Writes go to A’s store. When A pushes, the **server’s** store is updated (replication to server).
+
+3. **Device B (e.g. second machine or second process with its own DB)**  
+   - Another API process.  
+   - **Different** Qdrant (e.g. port 6335) and Neo4j (e.g. 7689).  
+   - `.env`: `SYNC_SERVER_URL=http://<server-host>:8000/api`, `DEVICE_ID=device-b`.  
+   - When B **pulls**, the server sends changes from its sync log; the sync engine **applies** them into **B’s** Qdrant/Neo4j. That’s replication from server → B.
+
+So: **replication happens because A’s store, server’s store, and B’s store are different.** Same Qdrant/Neo4j for everyone = one store, no replication.
+
+---
+
+### 3. Quick test from your app (single store)
+
+- **UI:** Add a memory or create a space; sync runs in background. Optionally a “Sync now” button → `POST /api/sync/trigger`.
+- **curl:**
+
+  ```bash
+  curl -X POST http://localhost:8000/api/sync/trigger
+  curl -X POST http://localhost:8000/api/remme/add -H "Content-Type: application/json" -d '{"text": "I prefer TypeScript.", "category": "general"}'
+  ```
+
+---
+
+### 4. If sync is disabled
+
+Leave `SYNC_ENGINE_ENABLED` unset or `false`. No push/pull, no startup sync, no sync after add/create. Sync endpoints return 503 when disabled.
 
 ---
 

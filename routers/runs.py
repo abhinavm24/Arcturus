@@ -27,6 +27,8 @@ from remme.utils import get_embedding
 from config.settings_loader import settings
 from core.skills.manager import skill_manager
 
+from core.skills.manager import skill_manager
+
 
 router = APIRouter(tags=["Runs"])
 
@@ -163,9 +165,12 @@ async def process_run(
     - Child spans (agent_loop.run, llm.generate) inherit trace_id automatically
     """
     with run_span(run_id, query or "") as span:
+        skill = None
+        context = None
+        memory_context = ""
+        results = []
         try:
             # 0. SKILL MATCHING & START HOOK
-            skill = None
             if not skill_id:
                 skill_id = skill_manager.match_intent(query)
             
@@ -173,9 +178,15 @@ async def process_run(
                 skill = skill_manager.get_skill(skill_id)
                 if skill:
                     print(f"[{run_id}] 🧠 Skill Detected: {skill_id}")
-                    skill.context.run_id = run_id
-                    skill.context.agent_id = source
-                    skill.context.config = {"source": source}
+                    skill_context = getattr(skill, "context", None)
+                    if skill_context is None:
+                        from types import SimpleNamespace
+
+                        skill_context = SimpleNamespace(run_id=None, agent_id=None, config={})
+                        setattr(skill, "context", skill_context)
+                    skill_context.run_id = run_id
+                    skill_context.agent_id = source
+                    skill_context.config = {"source": source, "query": query}
                     
                     # Call On Start Hook (allows prompt modification)
                     query = await skill.on_run_start(query)
@@ -183,9 +194,6 @@ async def process_run(
 
             # 1. RETRIEVE MEMORIES (Remme)
             # Orchestration: memory_retriever handles semantic recall, entity recall, graph expansion, merge
-            memory_context = ""
-            results = []
-            context = None  # Initialize for safe access in finally block
             try:
                 from memory.memory_retriever import retrieve
                 # Phase 3C: use space_id from request, or from existing session
@@ -196,6 +204,15 @@ async def process_run(
                         kg = get_knowledge_graph()
                         if kg and kg.enabled:
                             _space_id = kg.get_space_for_session(run_id)
+                    except Exception:
+                        pass
+                # Link session to space at run start so the run appears under the space even if no memories are extracted
+                if _space_id is not None:
+                    try:
+                        from memory.knowledge_graph import get_knowledge_graph
+                        _kg = get_knowledge_graph()
+                        if _kg and _kg.enabled:
+                            _kg.get_or_create_session(run_id, space_id=_space_id)
                     except Exception:
                         pass
                 memory_context, results = retrieve(
@@ -236,6 +253,11 @@ async def process_run(
             span.set_status(Status(StatusCode.ERROR, str(e)))
             span.record_exception(e)
             print(f"Run {run_id} failed: {e}")
+            if skill:
+                 try:
+                     await skill.on_run_failure(str(e))
+                 except Exception as fe:
+                     print(f"⚠️ [Skill] Failure hook failed: {fe}")
             if skill:
                  try:
                      await skill.on_run_failure(str(e))
@@ -292,6 +314,7 @@ async def process_run(
                     extraction = await asyncio.to_thread(
                         unified.extract_from_session, query, history, existing_memories=results
                     )
+                    print(f" Remme: Extracted MEM from run {run_id}---->{extraction}")
                     commands = [{"action": m.action, "text": m.text, "id": m.id} for m in extraction.memories]
                     preferences = None  # do not write to hubs; step 3 ingests facts to Neo4j
                 else:
@@ -575,6 +598,23 @@ async def process_run(
                           f"Response not queued for TTS: "
                           f"{voice_output[:100] if output_len > 100 else voice_output}")
 
+                # 4. SKILL SUCCESS HOOK
+                if skill:
+                    try:
+                        print(f"[{run_id}] 🧠 Executing Success Hook for skill: {skill_id}")
+                        skill_result = await skill.on_run_success(final_result)
+                        if skill_result and isinstance(skill_result, dict):
+                            if "summary" in skill_result:
+                                final_result["skill_summary"] = skill_result["summary"]
+                                # Update voice output if skill provided a specific summary
+                                # (e.g. for "check my email", the skill summary is better than the agent's raw output)
+                                if source == "voice":
+                                    voice_output = skill_result["summary"]
+                            if "file_path" in skill_result:
+                                final_result["skill_file_path"] = skill_result["file_path"]
+                    except Exception as se:
+                        print(f"⚠️ [Skill] Success hook failed for {skill_id}: {se}")
+
                 # Signal run complete (for the Event-based / non-streaming path)
                 signal_run_complete(run_id, voice_output)
             except Exception as e:
@@ -650,16 +690,28 @@ async def list_runs():
                         (n.get("total_tokens", 0) or 0) for n in nodes
                     )
                     
+                    run_id = session_file.stem.replace("session_", "")
                     runs.append({
-                        "id": session_file.stem.replace("session_", ""),
-                        "query": query, 
-                        "created_at": created_at, 
+                        "id": run_id,
+                        "query": query,
+                        "created_at": created_at,
                         "status": computed_status,
-                        "total_tokens": total_tokens
+                        "total_tokens": total_tokens,
                     })
-                except:
+                except Exception:
                     continue
-    
+
+    # Phase 4: Enrich with space_id from Neo4j so frontend can filter by space
+    try:
+        from memory.knowledge_graph import get_knowledge_graph
+        kg = get_knowledge_graph()
+        if kg is not None:
+            for r in runs:
+                space_id = kg.get_space_for_session(r["id"])
+                r["space_id"] = space_id
+    except Exception:
+        pass
+
     # Sort by recent
     return sorted(runs, key=lambda x: x['id'], reverse=True)
 

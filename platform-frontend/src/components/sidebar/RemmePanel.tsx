@@ -1,10 +1,27 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useAppStore } from '@/store';
-import { Search, Brain, Trash2, Plus, AlertCircle, TriangleAlert, Settings2, Monitor, Shield, Code2, Terminal, Heart, Zap, Utensils, Music, Film, BookOpen, Briefcase, Sparkles, RefreshCw, Coffee, Dog, Palette, MessageSquare, Globe, PawPrint, ListTree, GitPullRequest } from 'lucide-react';
+import { Search, Brain, Trash2, Plus, AlertCircle, TriangleAlert, Settings2, Monitor, Shield, Code2, Terminal, Heart, Zap, Utensils, Music, Film, BookOpen, Briefcase, Sparkles, RefreshCw, Coffee, Dog, Palette, MessageSquare, Globe, PawPrint, ListTree, GitPullRequest, FolderOpen } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import { formatDistanceToNow } from 'date-fns';
+
+/** Safe timestamp for sort (invalid/missing → 0 so they sort to end). */
+function getSortTime(created_at: string | undefined | null): number {
+    if (created_at == null || created_at === '') return 0;
+    const t = new Date(created_at).getTime();
+    return Number.isFinite(t) ? t : 0;
+}
+
+/** Safe relative date for display; returns "—" when invalid or missing. */
+function formatMemoryDate(created_at: string | undefined | null): string {
+    if (created_at == null || created_at === '') return '—';
+    const d = new Date(created_at);
+    if (!Number.isFinite(d.getTime())) return '—';
+    return `${formatDistanceToNow(d)} ago`;
+}
 import axios from 'axios';
 import { API_BASE } from '@/lib/api';
 
@@ -61,15 +78,27 @@ export const RemmePanel: React.FC = () => {
 // ============================================================================
 
 const SnippetsView: React.FC = () => {
-    const { memories, fetchMemories, addMemory, deleteMemory, cleanupDanglingMemories, isRemmeAddOpen: isAddOpen, setIsRemmeAddOpen: setIsAddOpen } = useAppStore();
+    const { memories, fetchMemories, addMemory, deleteMemory, cleanupDanglingMemories, isRemmeAddOpen: isAddOpen, setIsRemmeAddOpen: setIsAddOpen, spaces, currentSpaceId, fetchSpaces, setIsSpacesModalOpen } = useAppStore();
     const [searchQuery, setSearchQuery] = useState("");
     const [expandedMemoryId, setExpandedMemoryId] = useState<string | null>(null);
     const [newMemoryText, setNewMemoryText] = useState("");
+    const [memorySpaceId, setMemorySpaceId] = useState<string | null>(null);
     const [isAdding, setIsAdding] = useState(false);
 
     useEffect(() => {
         fetchMemories();
-    }, []);
+    }, [currentSpaceId, fetchMemories]);
+
+    useEffect(() => {
+        if (isAddOpen) {
+            setMemorySpaceId(currentSpaceId);
+            fetchSpaces();
+        }
+    }, [isAddOpen, currentSpaceId, fetchSpaces]);
+
+    const currentSpaceName = currentSpaceId
+        ? spaces.find((s) => s.space_id === currentSpaceId)?.name || 'Space'
+        : 'Global';
 
     const filteredMemories = useMemo(() => {
         let items = [...memories];
@@ -79,7 +108,7 @@ const SnippetsView: React.FC = () => {
                 m.category.toLowerCase().includes(searchQuery.toLowerCase())
             );
         }
-        return items.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+        return items.sort((a, b) => getSortTime(b.created_at) - getSortTime(a.created_at));
     }, [memories, searchQuery]);
 
     const danglingCount = useMemo(() => memories.filter(m => m.source_exists === false).length, [memories]);
@@ -88,7 +117,7 @@ const SnippetsView: React.FC = () => {
         if (!newMemoryText.trim()) return;
         setIsAdding(true);
         try {
-            await addMemory(newMemoryText);
+            await addMemory(newMemoryText, "general", memorySpaceId);
             setNewMemoryText("");
             setIsAddOpen(false);
         } finally {
@@ -99,18 +128,19 @@ const SnippetsView: React.FC = () => {
     return (
         <div className="flex flex-col h-full">
             {/* Header & Search */}
-            <div className="p-2 border-b border-border/50 bg-muted/20 flex items-center gap-1.5 shrink-0">
-                <div className="relative flex-1 group">
-                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground group-hover:text-foreground transition-colors" />
-                    <Input
-                        className="w-full bg-background/50 border-transparent focus:bg-background focus:border-border rounded-md text-xs pl-8 pr-2 h-8 transition-all placeholder:text-muted-foreground"
-                        placeholder="Search your memories..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                    />
-                </div>
+            <div className="p-2 border-b border-border/50 bg-muted/20 space-y-2 shrink-0">
+                <div className="flex items-center gap-1.5">
+                    <div className="relative flex-1 group">
+                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground group-hover:text-foreground transition-colors" />
+                        <Input
+                            className="w-full bg-background/50 border-transparent focus:bg-background focus:border-border rounded-md text-xs pl-8 pr-2 h-8 transition-all placeholder:text-muted-foreground"
+                            placeholder="Search your memories..."
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                        />
+                    </div>
 
-                <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-1">
                     <Button
                         variant="ghost"
                         size="icon"
@@ -141,11 +171,34 @@ const SnippetsView: React.FC = () => {
                         <TriangleAlert className="w-4 h-4" />
                     </Button>
                 </div>
+                </div>
+                <button
+                    onClick={() => setIsSpacesModalOpen(true)}
+                    className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1"
+                    title="Manage Spaces"
+                >
+                    <FolderOpen className="w-3 h-3" />
+                    Space: {currentSpaceName}
+                </button>
             </div>
 
             {/* Add Memory Form */}
             {isAddOpen && (
                 <div className="p-3 border-b border-border/50 bg-primary/5 space-y-2">
+                    <div className="space-y-1">
+                        <Label className="text-[10px] text-muted-foreground uppercase tracking-wider">Space</Label>
+                        <Select value={memorySpaceId ?? "__global__"} onValueChange={(v) => setMemorySpaceId(v === "__global__" ? null : v)}>
+                            <SelectTrigger className="h-8 bg-background border-border text-xs">
+                                <SelectValue placeholder="Global" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="__global__">Global</SelectItem>
+                                {spaces.map((s) => (
+                                    <SelectItem key={s.space_id} value={s.space_id}>{s.name || 'Unnamed Space'}</SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    </div>
                     <Input
                         className="w-full bg-background border-border rounded-md text-xs h-9"
                         placeholder="Enter a memory... (e.g. 'I love horoscopes and astrology')"
@@ -238,7 +291,7 @@ const SnippetsView: React.FC = () => {
                                             {memory.category}
                                         </div>
                                         <span className="text-[9px] text-muted-foreground/50 font-mono">
-                                            {formatDistanceToNow(new Date(memory.created_at))} ago
+                                            {formatMemoryDate(memory.created_at)}
                                         </span>
                                     </div>
                                 </div>

@@ -1,6 +1,6 @@
 # P11 Mnemo — Unified Project Reference
 
-**Use this file** when starting a new chat or when you need full context: it combines the project charter, delivery scope, Neo4j knowledge graph design, unified extraction design, and current implementation status in **one self-contained place**. All details are inlined here. For future phases (Phase 3, 4, 5), **attach only this file** — no need for `p11_unified_extraction_design.md` or other design docs.
+**Use this file** when starting a new chat or when you need full context: it combines the project charter, delivery scope, Neo4j knowledge graph design, unified extraction design, and current implementation status in **one self-contained place**. All details are inlined here. For future phases (Phase 3 = Spaces ✅, Phase 4 = Sync Engine, Phase 5 = Lifecycle Manager), **attach only this file** — no need for `p11_unified_extraction_design.md` or other design docs.
 
 Update **§2 Status at a glance** and **§8 Remaining / next steps** as work progresses.
 
@@ -28,12 +28,16 @@ Update **§2 Status at a glance** and **§8 Remaining / next steps** as work pro
 | **Retrieval gap (semantic returns 0)** | ✅ Addressed | Entity-first path runs independently; k=10; graph expansion; multi-tenant safe |
 | **Memory delete & orphan cleanup** | ✅ Done | `delete_memory` in `knowledge_graph.py`; qdrant_store calls it on delete |
 | **Preferences unification** | ✅ Done | Fact/Evidence, adapter, migration; backend ready for UI edits |
-| **Session-level extraction** | ⏳ Phase 3/4 | One pass for memories + preferences + entities from session |
-| **Spaces / space_id** | ⏳ Phase 3 | Schema ready; retrieval scoping deferred |
+| **Phase 3: Spaces & Collections** | ✅ Done | Spaces UI: panel, create/list/select spaces; runs & memories by space; see §4.2 |
+| **Neo4j Fact space_id (global sentinel)** | ✅ Done | `SPACE_ID_GLOBAL` instead of null; upsert_fact, merge_list_fact, create_evidence, get_facts_for_user |
+| **Session-level extraction** | ⏳ Deferred | One pass for memories + preferences + entities from session; see §8.2 |
+| **Retrieval scoping by space** | ⏳ Future | List/filter done; full retrieval scoping deferred; see §8.4 |
+| **Phase 4: Sync Engine** | ✅ Core done | CRDT-based sync (LWW), push/pull API, selective sync; see §8.5 |
+| **Phase 5: Lifecycle Manager** | ⏳ Deferred | Importance, archival, contradiction resolution; UI edit frontend; user_id FE; see §8.8 |
 | **UI edit (frontend + backend)** | ⏳ Phase 5 | Backend ready; frontend deferred |
 | **Entity-friendly Qdrant payload** | ⏳ Optional | §8.1 — beyond `entity_ids` + optional `entity_labels` |
 | **Expansion depth** | ⏳ Future | One-hop only; `depth` parameter reserved for multi-hop |
-| **user_id: FE ownership** | ⏳ Phase 5 | Move user_id to frontend for server deployment; see §8.6 |
+| **user_id: FE ownership** | ⏳ Phase 5 | Move user_id to frontend for server deployment; see §8.7 |
 
 ---
 
@@ -45,14 +49,14 @@ Update **§2 Status at a glance** and **§8 Remaining / next steps** as work pro
 - Shows how concepts connect (knowledge graph)
 - Can later support sync and organization (Spaces, lifecycle)
 
-**Phases (conceptual):**
+**Phases (original goals; some scope deferred):**
 
 - **Phase 1:** FAISS → Qdrant (cloud-capable vector store). **Done.**
 - **Phase 2/3:** Neo4j knowledge graph (entities, relationships, dual-path retrieval). **Core done.**
 - **Phase 2.5:** Unified extractor with registry-owned fact identity (field_id). **Done.**
-- **Phase 3:** Spaces/collections; session-level extraction. **Deferred.**
-- **Phase 4:** Cross-device sync (CRDT). **Deferred.**
-- **Phase 5:** UI edit frontend, lifecycle (importance, archival, contradiction resolution), user_id FE ownership. **Deferred.**
+- **Phase 3:** Spaces & Collections (Perplexity-style project hubs). **Done.** Create/list/select spaces; runs and memories filtered by space. Retrieval scoping by space deferred. Session-level extraction deferred.
+- **Phase 4:** **Sync Engine** — Cross-device sync (CRDT-based), conflict resolution, selective sync. **Deferred.**
+- **Phase 5:** **Lifecycle Manager** — Smart memory management: importance scoring, decay & archival, contradiction resolution, privacy controls; plus UI edit frontend and user_id FE ownership. **Deferred** (backend for UI edit done).
 
 **Current systems (pre-Mnemo):**
 
@@ -99,9 +103,29 @@ Update **§2 Status at a glance** and **§8 Remaining / next steps** as work pro
 - `memory/neo4j_preferences_adapter.py` — `FACT_TO_HUB_PATH` derived from registry
 - `knowledge_graph.py` — `merge_list_fact`, normalizer used in ingest_memory and ingest_from_unified_extraction
 
-### 4.2 Deferred (from delivery README)
+### 4.2 Phase 3: Spaces & Collections (Done)
 
-- Session-level extraction (§8.2), preferences unification (§8.3), Spaces/collections (§8.4), sync, lifecycle, frontend (graph explorer, spaces manager), performance tuning (e.g. retrieval P95 < 250ms benchmark).
+**Backend**
+
+- **routers/remme.py:** `POST /remme/spaces` create space; `GET /remme/spaces` list spaces; `GET /remme/memories?space_id=` filter memories; `POST /remme/add` accepts `space_id`; `create_memory` passes `space_id` to Qdrant and Neo4j.
+- **routers/runs.py:** `POST /runs` accepts `space_id`; `list_runs` enriches runs with `space_id` from Neo4j via `get_space_for_session(run_id)`; `get_or_create_session(run_id, space_id)` at run start.
+- **memory/knowledge_graph.py:** `create_space`, `get_space_for_session` (OPTIONAL MATCH), `get_or_create_session(..., space_id)`; `_ensure_schema` creates dummy Session+Space with IN_SPACE so Neo4j type exists.
+- **memory/space_constants.py:** `SPACE_ID_GLOBAL = "__global__"` for global memories/facts.
+- **Neo4j Fact space_id:** Fact nodes use `space_id: "__global__"` instead of null (Neo4j 5 rejects null in MERGE). `upsert_fact`, `merge_list_fact`, `create_evidence`, `get_facts_for_user` updated; `upsert_fact_from_ui` passes `space_id` to `create_evidence`.
+
+**Frontend (platform-frontend)**
+
+- **api.ts:** `getSpaces()`, `createSpace()`, `createRun(..., space_id?)`, `addMemory(..., space_id?)`, `getMemories(space_id?)`.
+- **store:** SpacesSlice (`spaces`, `currentSpaceId`, `fetchSpaces`, `createSpace`, `setCurrentSpaceId`); `currentSpaceId` persisted.
+- **SpacesPanel.tsx:** Create/list spaces; select Global or a space; nav icon (FolderOpen) between Runs and RAG.
+- **New Run dialog:** Space selector; passes `space_id` to `createRun`.
+- **Add Memory (Remme):** Space selector; passes `space_id` to `addMemory`.
+- **Sidebar.tsx:** Runs list filters by `currentSpaceId`; shows only runs in the selected space.
+- **SnippetsView:** Displays "Space: Global | [name]"; refetches memories when space changes.
+
+### 4.3 Deferred (from delivery README)
+
+- Session-level extraction (§8.2), full retrieval scoping by space (§8.4), **Phase 4 Sync Engine**, **Phase 5 Lifecycle Manager**, frontend (graph explorer, spaces manager, UI edit), performance tuning (e.g. retrieval P95 < 250ms benchmark).
 
 ---
 
@@ -132,6 +156,12 @@ memory/fact_field_registry.py       — field_id as canonical; FIELD_DEFS, get_f
 memory/fact_normalizer.py           — normalize_facts(facts with field_id) → canonical (namespace, key) from registry
 memory/unified_extraction_schema.py — FactItem(field_id, ...); _derive_user_facts_from_facts
 core/skills/library/unified_extraction/ — SKILL.md with {{VALID_FIELD_IDS}}
+
+# Phase 3 (Spaces & Collections)
+memory/space_constants.py           — SPACE_ID_GLOBAL
+platform-frontend/src/lib/api.ts    — getSpaces, createSpace, addMemory(space_id), getMemories(space_id), createRun(space_id)
+platform-frontend/src/store/index.ts — SpacesSlice, currentSpaceId
+platform-frontend/src/components/sidebar/SpacesPanel.tsx — create/list/select spaces
 ```
 
 ### 5.2 Data flow
@@ -171,10 +201,11 @@ Neo4j stores **extracted entities and relationships** from Remme memories. Link 
 | Label   | Properties | Purpose |
 |--------|------------|--------|
 | **User** | `id`, `user_id` | Multi-tenant anchor |
-| **Memory** | `id` (Qdrant id), `category`, `source`, `created_at` | Bridge to Qdrant; future: `space_id` or `IN_SPACE` |
+| **Memory** | `id` (Qdrant id), `category`, `source`, `created_at` | Bridge to Qdrant; Session–IN_SPACE→Space links run to space |
 | **Session** | `id`, `session_id`, `original_query`, `created_at` | Provenance |
 | **Entity** | `id`, `type`, `name`, `canonical_name`, `composite_key`, `created_at` | Person, Company, Concept, etc. `name` = display; `canonical_name` = normalized; `composite_key` = `type::canonical_name` for dedupe |
-| **Fact** | `id`, `user_id`, `namespace`, `key`, `value_type`, `value_text`/`value_number`/`value_bool`/`value_json`, `confidence`, `source_mode`, `status`, `first_seen_at`, `last_seen_at`, `last_confirmed_at`, `editability` | Canonical user fact/preference; unique on (user_id, namespace, key) |
+| **Fact** | `id`, `user_id`, `namespace`, `key`, `space_id`, `value_type`, `value_text`/`value_number`/`value_bool`/`value_json`, `confidence`, `source_mode`, `status`, `first_seen_at`, `last_seen_at`, `last_confirmed_at`, `editability` | Canonical user fact/preference; unique on (user_id, namespace, key, space_id). Global facts use `space_id = "__global__"` (Neo4j 5 rejects null in MERGE). |
+| **Space** | `space_id`, `name`, `description` | Perplexity-style project hub; Session–IN_SPACE→Space |
 | **Evidence** | `id`, `source_type`, `source_ref`, `timestamp` | Provenance for a fact (optional later: signal_category, raw_excerpt, confidence_delta) |
 
 **Relationships**
@@ -192,6 +223,7 @@ Neo4j stores **extracted entities and relationships** from Remme memories. Link 
 | FROM_MEMORY, FROM_SESSION | Evidence → Memory, Evidence → Session | Evidence provenance |
 | REFERS_TO | Fact → Entity | Fact references an entity |
 | SUPERSEDES | Fact → Fact | Fact supersedes another |
+| IN_SPACE | Session → Space, Fact → Space | Session/fact belongs to space; absent = global |
 | CONTRADICTS | (Phase 5) | Reserved for conflicting facts |
 
 ### 6.3 Qdrant payload (arcturus_memories)
@@ -257,7 +289,7 @@ Query
 
 ## 7. Implementation status (verified in code)
 
-- **knowledge_graph.py:** `ENTITY_REL_TYPES`, `USER_ENTITY_REL_TYPES`, `FACT_DERIVATION_TABLE`; Fact/Evidence schema; `upsert_fact()`, `create_evidence()`, `upsert_fact_from_ui()` (step 7); `_derive_user_entity_from_facts()`; `ingest_memory(..., facts=, evidence_events=)` writes Fact/Evidence and derives User–Entity; `ingest_from_unified_extraction()` for session pipeline; optional `space_id` on `create_memory()` and `upsert_fact()` (step 6); `last_confirmed_at` set when source_mode=ui_edit; canonical_name/composite_key; `resolve_entity_candidates`; `expand_from_entities`; `delete_memory`; `create_user_entity_relationship(..., confidence=)`.
+- **knowledge_graph.py:** `ENTITY_REL_TYPES`, `USER_ENTITY_REL_TYPES`, `FACT_DERIVATION_TABLE`; Fact/Evidence schema; `upsert_fact()`, `create_evidence()`, `upsert_fact_from_ui()` (step 7); `_derive_user_entity_from_facts()`; `ingest_memory(..., facts=, evidence_events=)` writes Fact/Evidence and derives User–Entity; `ingest_from_unified_extraction()` for session pipeline; optional `space_id` on `create_memory()` and `upsert_fact()` (step 6); `last_confirmed_at` set when source_mode=ui_edit; canonical_name/composite_key; `resolve_entity_candidates`; `expand_from_entities`; `delete_memory`; `create_user_entity_relationship(..., confidence=)`; `create_space()`, `get_space_for_session()`, `get_or_create_session(..., space_id)`; Fact `space_id` uses `SPACE_ID_GLOBAL` instead of null; `get_facts_for_user` includes `f.space_id = $global_sentinel` in WHERE.
 - **entity_extractor.py:** LLM extraction from memory text; `extract_from_query` for query NER; uses `entity_extraction` skill and model from config.
 - **memory_retriever.py:** `retrieve()` — semantic k=10; entity path independent; `result_ids` global dedupe; `_store_get_many`/`get_batch` for batch fetch; `expand_from_entities` and entity-first path both used.
 - **qdrant_store.py:** `_ingest_to_knowledge_graph` on add; when MNEMO_ENABLED uses unified extractor and `to_legacy_entity_result()`; else EntityExtractor; on delete calls `kg.delete_memory(memory_id)` when KG enabled.
@@ -274,6 +306,10 @@ Query
 - **core/skills/registry.json:** `entity_extraction` → `core/skills/library/entity_extraction`.
 - **routers/remme.py:** `PUT /remme/preferences/facts` for UI fact edits (step 7); `UpdateFactRequest`; requires MNEMO_ENABLED.
 - **scripts:** `migrate_memories_to_neo4j.py`, `migrate_all_memories.py` (docker/cloud modes) present and wired.
+- **memory/space_constants.py:** `SPACE_ID_GLOBAL = "__global__"` for global memories/facts.
+- **routers/remme.py:** `POST /remme/spaces`, `GET /remme/spaces`, `GET /remme/memories?space_id=`, `POST /remme/add` with `space_id`; create_memory passes space_id.
+- **routers/runs.py:** `POST /runs` with `space_id`; `list_runs` enriches with `space_id` via `get_space_for_session`; `get_or_create_session(run_id, space_id)` at run start.
+- **platform-frontend:** SpacesPanel, getSpaces/createSpace/addMemory(space_id)/getMemories(space_id)/createRun(space_id); SpacesSlice; runs filtered by currentSpaceId.
 
 ---
 
@@ -291,7 +327,7 @@ Use this section as the single list of what to do next; update as you complete i
 
 **Step 5 (Migration):** Done. `scripts/migrate_hubs_to_neo4j.py` loads `preferences_hub.json`, `operating_context_hub.json`, `soft_identity_hub.json` from `memory/user_model/`, maps hub fields to Fact `(namespace, key, value)` with `source_mode=migration`, upserts Facts and creates Evidence nodes. Usage: `uv run python scripts/migrate_hubs_to_neo4j.py` or `--dry-run`. Null/empty values skipped. Add to §9.3 migrations list as needed.
 
-**Step 6 (Spaces):** Done (schema preparation). Optional `space_id` added to `create_memory()` and `upsert_fact()`. No retrieval scoping yet; reserved for Phase 3.
+**Step 6 (Spaces):** Done (Phase 3). Spaces & Collections UI, create/list/select spaces; runs and memories filtered by space; Fact uses `SPACE_ID_GLOBAL` for global scope. Full retrieval scoping by space deferred; see §8.4.
 
 **Step 7 (UI edit pipeline):** Backend done. `knowledge_graph.upsert_fact_from_ui()`, `PUT /remme/preferences/facts` with `UpdateFactRequest` (namespace, key, value_type, value/...). **Frontend deferred to Phase 5.**
 
@@ -316,44 +352,88 @@ Use this section as the single list of what to do next; update as you complete i
 - **UI and existing consumers:** Keep the current UX “more or less” the same by adding an **adapter or service layer** that reads from Qdrant/Neo4j (and optionally from existing JSON for backward compatibility) and exposes the same or similar structure that the UI and hubs expect (e.g. same categories, same field names). Over time, the UI can be pointed only at the new store.
 - **Extraction pipeline:** As in 8.2, the session-level extractor would output memories, preferences, and entities; the ingestion path would write preferences into the new store (and optionally still to JSON for a transition period). This may require mapping current hub schema (e.g. dietary_style, verbosity) to entities/concepts and user_facts (e.g. PREFERS → Concept "vegetarian") so that both the graph and the UI stay consistent.
 
-### 8.4 Space / space_id — schema ready (retrieval scoping deferred)
+### 8.4 Space / space_id — Phase 3 delivered; retrieval scoping deferred
 
-- **Context:** Mnemo spec includes Spaces/Collections. Optional `space_id` added to `create_memory()` and `upsert_fact()` (step 6). Retrieval scoping by space not yet implemented.
-- **Reserved design (no code yet):**
-  - **Option A:** Add `(:Memory)-[:IN_SPACE]->(:Space)` and a `Space` node; constrain all retrieval paths (entities for user, expand, resolve) to memories in the requested space(s).
-  - **Option B:** Add `space_id` as a property on `Memory` and filter queries with `WHERE m.space_id = $space_id` (or `IN $space_ids`).
-- **Where to add the hook when implementing:** In `memory/knowledge_graph.py`, all user-scoped reads that traverse memories (e.g. `get_entities_for_user`, `expand_from_entities`, `get_memory_ids_for_entity_names`, and any Qdrant call that uses `entity_ids` from the graph) should accept an optional `space_id` (or `space_ids`) and constrain to memories in that space. Ingestion (`create_memory`, `ingest_memory`) would accept optional `space_id` and set the relationship or property. Qdrant payload would include `space_id` for filtered search.
+- **Delivered (Phase 3 — Spaces & Collections):**
+  - **Space node + Session–IN_SPACE→Space:** `create_space()`, `get_space_for_session()`, `get_or_create_session(run_id, space_id)`; `_ensure_schema` creates dummy Session+Space with IN_SPACE so Neo4j type exists.
+  - **Fact space_id:** Uses `SPACE_ID_GLOBAL = "__global__"` instead of null (Neo4j 5 rejects null in MERGE). `upsert_fact`, `merge_list_fact`, `create_evidence`, `get_facts_for_user` updated; `upsert_fact_from_ui` passes `space_id` to `create_evidence`.
+  - **Backend APIs:** `POST /remme/spaces`, `GET /remme/spaces`, `GET /remme/memories?space_id=`, `POST /remme/add` and `POST /runs` accept `space_id`; `list_runs` enriches with `space_id` from Neo4j.
+  - **Frontend:** SpacesPanel, create/list/select spaces; runs filtered by currentSpaceId; memories fetched by space; Add Memory and New Run dialogs include space selector.
+- **Deferred (retrieval scoping):** When running a query inside a space, retrieval (memory_retriever) does not yet constrain to memories in that space. Options when implementing:
+  - **Option A:** Constrain all retrieval paths (entities for user, expand, resolve) to memories in the requested space(s) via `space_id` or `IN_SPACE`.
+  - **Option B:** Add `space_id` to Qdrant payload and filter vector search; constrain Neo4j paths similarly.
+- **Where to add the hook:** In `memory/knowledge_graph.py`, reads that traverse memories (e.g. `expand_from_entities`, `get_memory_ids_for_entity_names`) should accept optional `space_id`/`space_ids` and constrain to memories in that space. `memory_retriever.retrieve()` would accept optional `space_id` and pass through to Qdrant filter and Neo4j.
 
-### 8.5 Other known gaps (from delivery README)
+### 8.5 Phase 4: Sync Engine (implemented)
+
+**Original goal (from P11_EXPLANATION):** Cross-device sync so memories are available on all devices (phone, laptop, tablet).
+
+- **Sync Engine** (`memory/sync/`): CRDT-style LWW merge; conflict-free replication across devices.
+- **Conflict resolution:** LWW (last-writer-wins) by (updated_at, device_id).
+- **Selective sync:** Per-space `sync_policy` (sync | local_only); global space always syncs.
+- **Offline:** Local store is source of truth; push/pull when connected.
+
+**Implemented (Phase 4 core):**
+
+- **memory/sync_config.py:** `is_sync_engine_enabled()`, `get_sync_server_url()`, `get_device_id()`
+- **memory/sync/schema.py:** MemoryDelta, SpaceDelta, SyncChange, PushRequest/Response, PullRequest/Response
+- **memory/sync/policy.py:** `should_sync_space()`, filter by sync_policy
+- **memory/sync/merge.py:** LWW merge logic (`lww_wins`, `merge_memory_change`)
+- **memory/sync/change_tracker.py:** Build push payload from memories and spaces
+- **memory/sync/transport.py:** HTTP client for push/pull
+- **memory/sync/engine.py:** SyncEngine (push, pull, sync), `get_sync_engine()`
+- **routers/sync.py:** `POST /api/sync/push`, `POST /api/sync/pull`, `POST /api/sync/trigger`
+- **Qdrant payload:** `version`, `device_id`, `updated_at`, `deleted` on memories
+- **Neo4j Space:** `sync_policy`, `version`, `device_id`, `updated_at`; `create_space(sync_policy=)`, `upsert_space()`, `delete_space()`
+- **qdrant_store.sync_upsert():** Apply pulled memory with explicit id
+
+**Design:** See **CAPSTONE/project_charters/P11_PHASE4_SYNC_ENGINE_DESIGN.md**.
+
+**Env:** `SYNC_ENGINE_ENABLED=true`, `SYNC_SERVER_URL` (e.g. http://localhost:8000/api), optional `DEVICE_ID`.
+
+### 8.6 Other known gaps (from delivery README)
 
 - Expansion depth: one-hop only; `depth` reserved for multi-hop.
-- Spaces, sync, lifecycle, frontend (graph explorer, spaces manager): deferred.
+- Retrieval scoping by space: deferred (Phase 3 Spaces UI done; retrieval still global).
+- **Phase 4 Sync Engine:** deferred (see §8.5).
+- **Phase 5 Lifecycle Manager:** deferred (see §8.8).
+- Frontend (graph explorer, spaces manager): deferred.
 - Retrieval P95 < 250ms: to be benchmarked.
 - Acceptance/integration tests: structural tests in place; feature-level tests (memory influences planner, cross-project retrieval) to be expanded per charter.
 
-### 8.6 user_id: frontend ownership (Phase 5, for server deployment)
+### 8.7 user_id: frontend ownership (Phase 5, for server deployment)
 
 - **Current:** `user_id` is created and maintained at server level.
 - **Target:** Move user_id generation and caching to the frontend. FE persists stable user id (localStorage/cookie) and sends with each request. Backend uses as opaque tenant key only.
 - **Scope:** Contract (header/body for `user_id`); FE owns generation; backend accepts client-provided `user_id` only.
 
-### 8.7 Phase 5: UI edit, lifecycle, user_id (consolidated remaining work)
+### 8.8 Phase 5: Lifecycle Manager (goal + consolidated remaining work)
+
+**Original goal (from P11_EXPLANATION):** Smart Memory Management — memories have importance scores and lifecycle; contradiction resolution; privacy controls.
+
+**Lifecycle Manager** (`memory/lifecycle.py`) — target capabilities:
+- **Importance scoring:** Frequently accessed memories get promoted; score based on access frequency/recency.
+- **Decay & archival:** Old, unused memories archived (still searchable, not in active top results).
+- **Contradiction resolution:** If user says "I like X" then "I hate X", flag both and ask to clarify; CONTRADICTS relationship in schema reserved for this.
+- **Privacy controls:** Mark memories as private / shareable / public (or per-space visibility).
 
 **Phase 5 items** (to implement when starting Phase 5):
 
-1. **UI edit (frontend)** — Build UI to edit preferences/facts. Backend ready: `PUT /remme/preferences/facts`, `UpdateFactRequest` (namespace, key, value_type, value). Adapter returns hub shape from Neo4j. UI must present canonical fields (from registry) for editing; display GET /preferences response.
+1. **Optional login / register (first)** — Full register and login experience before other Phase 5 work. **Guest:** When user is not logged in, use a generated `user_id` (ideally from frontend for future shared-backend deployment; otherwise backend-generated and cached). **Register:** On first-time registration, if the user already has a cached guest id from prior sessions, associate that id to the new account; otherwise create and associate a new user_id. **Login:** On successful login, use the user_id from the backend (DB) for that account. If the client had a different id cached (e.g. from another device or guest), migrate all associated sessions and memories from the cached id to the logged-in user_id so nothing is lost. Backend: user store, login/register endpoints, migration API (reassign memories/sessions from old user_id to new). Frontend: login/register UI, guest vs logged-in state, send user_id (or auth token that implies user_id) with requests. **Sync:** Once identity exists, Phase 4 sync endpoints can require auth (login token) and bind sync to the authenticated user_id instead of a separate optional sync secret.
 
-2. **UI edit flow (from design doc)** — On user edit: (1) upsert Fact with `source_mode=ui_edit`, `confidence=1.0`, `last_confirmed_at`; (2) create Evidence with `source_type=ui_edit`; (3) re-run derivation for User–Entity edges if edited fact implies entity relationship. Backend implements this; frontend calls the API.
+2. **UI edit (frontend)** — Build UI to edit preferences/facts. Backend ready: `PUT /remme/preferences/facts`, `UpdateFactRequest` (namespace, key, value_type, value). Adapter returns hub shape from Neo4j. UI must present canonical fields (from registry) for editing; display GET /preferences response.
 
-3. **user_id FE ownership** — See §8.6.
+3. **UI edit flow (from design doc)** — On user edit: (1) upsert Fact with `source_mode=ui_edit`, `confidence=1.0`, `last_confirmed_at`; (2) create Evidence with `source_type=ui_edit`; (3) re-run derivation for User–Entity edges if edited fact implies entity relationship. Backend implements this; frontend calls the API.
 
-4. **Lifecycle (optional)** — Importance, archival, contradiction resolution. CONTRADICTS relationship reserved in schema.
+4. **user_id FE ownership** — See §8.7. (May be partly or fully addressed by item 1.)
 
-5. **Other** — Expansion depth (multi-hop), Spaces retrieval scoping, graph explorer, spaces manager — per delivery README.
+5. **Lifecycle (core Phase 5)** — Importance scoring, archival, contradiction resolution. CONTRADICTS relationship reserved in schema. Implement `memory/lifecycle.py` and wire into retrieval/ingestion.
 
-### 8.8 Future Phase (post–Phase 5) — Spaces and beyond
+6. **Other** — Expansion depth (multi-hop), Phase 3 retrieval scoping by space, graph explorer, spaces manager — per delivery README.
 
-Items deferred from Phase 4 Spaces UI; to consider in future phases:
+### 8.9 Future Phase (post–Phase 5) — Spaces and beyond
+
+Items deferred from Phase 3 Spaces; to consider in future phases:
 
 1. **Per-space model choice and custom instructions** — Like Perplexity: allow users to override the default model and set custom system instructions per Space, so the assistant behaves differently inside each Space.
 
@@ -365,7 +445,17 @@ Items deferred from Phase 4 Spaces UI; to consider in future phases:
 
 5. **Space delete** — Backend support for deleting a Space (cascade or soft-delete of associated memories/sessions) if not yet implemented.
 
-### 8.9 Key design principles (from design doc, for future reference)
+6. **Unified memory architecture: Notes, Episodic, RAG** — Migrate Notes, Episodic memory (session summaries), and RAG documents to the same Mnemo architecture: space-scoped, Sync Engine–backed, offline-first. Add `space_id` to each entity; add entity types to the sync protocol (note, episodic_session, rag_document); use same LWW + per-space sync policy. The current architecture and Sync Engine design (§8.5, P11_PHASE4_SYNC_ENGINE_DESIGN.md) support this extension—sync protocol is entity-type agnostic. Notes: same pattern as Memories. Episodic: sessions already have space via Session–IN_SPACE→Space. RAG: decide sync granularity (per-document vs per-chunk); same policy/merge logic applies.
+
+7. **Shared spaces / multi-user collaboration** (charter 11.3) — Team members can contribute to and query shared knowledge spaces. Phase 4 Sync Engine is single-user multi-device only. Post–Phase 5: add permissions (viewer, contributor), invite flow, and cross-user sync for shared spaces.
+
+8. **Sharding / cross-user federated search** (charter 11.1) — Per-user shards with cross-user federated search for shared spaces. Depends on shared spaces (item 7). Post–Phase 5: sharding strategy when multi-user shared spaces are implemented.
+
+9. **Phase 4 Sync Engine — load testing and latency** — Sync load testing (multiple devices, burst changes, reconnection scenarios) and real-time sync application target (e.g. ≤100ms apply latency for pulled changes). See P11_PHASE4_SYNC_ENGINE_DESIGN.md §13.
+
+10. **Phase 4 Sync Engine — extended scope** — Peer-to-peer sync (no server), full CRDT for in-place text editing (RGA/Automerge), RAG sync, real-time WebSocket push. See design doc §11 Out of scope for v1.
+
+### 8.10 Key design principles (from design doc, for future reference)
 
 1. **Neo4j = structured truth** — Entities, relationships, Facts, Evidence.
 2. **Qdrant = semantic recall** — Memory text, vector search. Not source of truth for profile.
@@ -389,6 +479,7 @@ Items deferred from Phase 4 Spaces UI; to consider in future phases:
 - **Phase 1:** `VECTOR_STORE_PROVIDER` (qdrant|faiss), `QDRANT_URL`, `QDRANT_API_KEY`
 - **Phase 2/3:** `NEO4J_ENABLED` (true|false), `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD`
 - **P11 Mnemo unified path:** `MNEMO_ENABLED` (true|false). When true: unified extractor, Neo4j Fact/Evidence (step 3), adapter for preferences (step 4). When false: legacy RemMe extractor, normalizer, JSON hubs.
+- **Phase 4 Sync Engine:** `SYNC_ENGINE_ENABLED` (true|false), `SYNC_SERVER_URL` (e.g. http://localhost:8000/api), `DEVICE_ID` (optional; auto-generated and cached if not set).
 
 ### 9.3 Demo and migrations
 
@@ -417,8 +508,11 @@ Items deferred from Phase 4 Spaces UI; to consider in future phases:
 | Fact field registry | `memory/fact_field_registry.py` — get_field_def, get_valid_field_ids |
 | Fact normalizer | `memory/fact_normalizer.py` — normalize_facts() |
 | Preferences adapter | `memory/neo4j_preferences_adapter.py` — build_preferences_from_neo4j() |
+| Space constants | `memory/space_constants.py` — SPACE_ID_GLOBAL |
 | Qdrant config | `config/qdrant_config.yaml`; loader: `memory/qdrant_config.py` |
+| Spaces API (Phase 3) | `routers/remme.py` — POST/GET /remme/spaces; GET /remme/memories?space_id= |
+| Sync Engine (Phase 4) | `memory/sync/` — SyncEngine, get_sync_engine; `routers/sync.py` — /api/sync/push, pull, trigger |
 | Delivery checklist (fixed) | `CAPSTONE/project_charters/P11_DELIVERY_README.md` |
 | Setup (Qdrant, Neo4j) | `CAPSTONE/project_charters/P11_mnemo_SETUP_GUIDE.md` |
 
-**Continue in a new chat:** Attach this file only and say: *"Continue from P11_UNIFIED_REFERENCE.md"* or *"Implement [Phase 5 item] from §8.7."*
+**Continue in a new chat:** Attach this file only and say: *"Continue from P11_UNIFIED_REFERENCE.md"* or *"Implement [Phase 4 Sync Engine] from §8.5"* or *"Implement [Phase 5 Lifecycle Manager] from §8.8."*

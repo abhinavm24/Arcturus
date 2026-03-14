@@ -34,6 +34,7 @@ class AddMemoryRequest(BaseModel):
 class CreateSpaceRequest(BaseModel):
     name: str | None = None
     description: str | None = None
+    sync_policy: str | None = None  # Phase 4: "sync" | "local_only"
 
 
 class UpdateFactRequest(BaseModel):
@@ -134,6 +135,7 @@ async def background_smart_scan():
                     extraction = await asyncio.to_thread(
                         unified.extract_from_session, query, hist, existing
                     )
+                    print(f"🧠 RemMe: Extracted MEM from scanned Run {run_id}---->{extraction}")
                     commands = [{"action": m.action, "text": m.text, "id": m.id} for m in extraction.memories]
                     preferences = None
                 else:
@@ -220,10 +222,11 @@ async def background_smart_scan():
 # === Endpoints ===
 
 @router.get("/memories")
-async def get_memories():
-    """Get all stored memories with source existence check"""
+async def get_memories(space_id: str | None = Query(None, description="Filter memories by space; omit for all")):
+    """Get all stored memories with source existence check. Phase 4: optional space_id filter."""
     try:
-        memories = remme_store.get_all()
+        filter_meta = {"space_id": space_id} if space_id else None
+        memories = remme_store.get_all(filter_metadata=filter_meta)
         summaries_dir = PROJECT_ROOT / "memory" / "session_summaries_index"
         
         # Add source_exists flag
@@ -295,16 +298,15 @@ async def cleanup_dangling_memories():
 
 
 @router.post("/add")
-async def add_memory(request: AddMemoryRequest):
-    """Manually add a memory. Optional space_id for Phase 3 Spaces. When MNEMO_ENABLED=false, auto-extract to UserModel hubs; when true, ingestion uses unified extractor."""
+async def add_memory(request: AddMemoryRequest, background_tasks: BackgroundTasks):
+    """Manually add a memory. Optional space_id for Phase 3 Spaces. When MNEMO_ENABLED=false, auto-extract to UserModel hubs; when true, ingestion uses unified extractor. Phase 4: triggers background sync when sync engine enabled."""
     try:
         emb = get_embedding(request.text, task_type="search_query")
         add_kwargs: dict = {"category": request.category, "source": "manual"}
         if request.space_id:
             add_kwargs["space_id"] = request.space_id
         memory = remme_store.add(request.text, emb, **add_kwargs)
-        
-        # pdb.set_trace()
+
         from memory.mnemo_config import is_mnemo_enabled
         if not is_mnemo_enabled():
             try:
@@ -322,7 +324,16 @@ async def add_memory(request: AddMemoryRequest):
                 memory["extracted_preferences"] = []
         else:
             memory["extracted_preferences"] = []  # step 3 will ingest via unified extractor in qdrant_store
-        
+
+        # Phase 4: enqueue background sync when sync engine enabled
+        try:
+            from memory.sync_config import is_sync_engine_enabled, get_sync_server_url
+            if is_sync_engine_enabled() and get_sync_server_url():
+                from routers.sync import run_sync_background
+                background_tasks.add_task(run_sync_background)
+        except Exception:
+            pass
+
         return {"status": "success", "memory": memory}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -339,8 +350,8 @@ async def delete_memory(memory_id: str):
 
 
 @router.post("/spaces")
-async def create_space(request: CreateSpaceRequest):
-    """Create a new space for the user. Returns {space_id, name, description}. Phase 3 Spaces."""
+async def create_space(request: CreateSpaceRequest, background_tasks: BackgroundTasks):
+    """Create a new space for the user. Returns {space_id, name, description}. Phase 3 Spaces. Phase 4: triggers background sync when sync engine enabled."""
     try:
         from memory.knowledge_graph import get_knowledge_graph
         from memory.user_id import get_user_id
@@ -348,9 +359,24 @@ async def create_space(request: CreateSpaceRequest):
         if not kg or not kg.enabled:
             raise HTTPException(status_code=503, detail="Neo4j not enabled")
         user_id = get_user_id()
-        space_id = kg.create_space(user_id, name=request.name, description=request.description)
+        space_id = kg.create_space(
+            user_id,
+            name=request.name,
+            description=request.description,
+            sync_policy=request.sync_policy,
+        )
         if not space_id:
             raise HTTPException(status_code=500, detail="Failed to create space")
+
+        # Phase 4: enqueue background sync when sync engine enabled
+        try:
+            from memory.sync_config import is_sync_engine_enabled, get_sync_server_url
+            if is_sync_engine_enabled() and get_sync_server_url():
+                from routers.sync import run_sync_background
+                background_tasks.add_task(run_sync_background)
+        except Exception:
+            pass
+
         return {"status": "success", "space_id": space_id, "name": request.name or "", "description": request.description or ""}
     except HTTPException:
         raise
