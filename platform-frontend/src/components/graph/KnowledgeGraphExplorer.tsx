@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import cytoscape, { type Core, type ElementDefinition } from 'cytoscape';
+import cytoscape, { type Core, type EdgeSingular, type ElementDefinition } from 'cytoscape';
 import { useAppStore } from '@/store';
 import { api } from '@/lib/api';
 import { Network, RefreshCw, ZoomIn, ZoomOut, Loader2, AlertCircle } from 'lucide-react';
@@ -9,12 +9,78 @@ import { cn } from '@/lib/utils';
 
 const LIMIT = 150;
 
+/** Colors for entity types — use concrete HSL (Cytoscape doesn't support CSS variables). */
+const ENTITY_TYPE_COLORS: Record<string, string> = {
+    Person: 'hsl(210, 70%, 45%)',
+    Company: 'hsl(280, 60%, 45%)',
+    City: 'hsl(30, 70%, 45%)',
+    Place: 'hsl(140, 50%, 40%)',
+    Concept: 'hsl(0, 60%, 45%)',
+    Date: 'hsl(45, 80%, 45%)',
+    Entity: 'hsl(220, 60%, 50%)',
+};
+const DEFAULT_ENTITY_COLOR = 'hsl(220, 60%, 50%)';
+const USER_COLOR = 'hsl(173, 58%, 39%)';
+const MEMORY_COLOR = 'hsl(0, 0%, 52%)';
+
+interface SelectedNodeInfo {
+    id: string;
+    label: string;
+    type: string;
+    nodeKind?: string;
+    degree?: number;
+    connections?: { relType: string; targetLabel: string; direction: 'in' | 'out' }[];
+}
+
+function SelectedNodePanel({ node }: { node: SelectedNodeInfo }) {
+    const k = node.nodeKind || 'entity';
+    return (
+        <div className="p-3 border-t border-border/50 bg-muted/20 text-xs shrink-0 overflow-y-auto max-h-32">
+            <div className="font-semibold text-foreground">{node.label}</div>
+            <div className="text-muted-foreground mt-0.5">
+                {k === 'entity' && (
+                    <>
+                        <span>Type: {node.type}</span>
+                        {node.id && <span className="ml-2 opacity-70">ID: {String(node.id).slice(0, 12)}…</span>}
+                    </>
+                )}
+                {k === 'user' && <span>Your profile — connections to known entities</span>}
+                {k === 'memory' && (
+                    <>
+                        <span>Memory</span>
+                        {node.id && <span className="ml-2 opacity-70">ID: {String(node.id).slice(0, 16)}…</span>}
+                    </>
+                )}
+            </div>
+            {node.degree !== undefined && node.degree > 0 && (
+                <div className="mt-2 space-y-0.5">
+                    <span className="text-muted-foreground">{node.degree} connection{node.degree !== 1 ? 's' : ''}</span>
+                    {node.connections && node.connections.length > 0 && (
+                        <ul className="mt-1 space-y-0.5 pl-3 list-disc">
+                            {node.connections.map((c, i) => (
+                                <li key={i} className="text-muted-foreground">
+                                    <span className="text-foreground/80">{c.relType}</span>
+                                    <span className="mx-1">{c.direction === 'out' ? '→' : '←'}</span>
+                                    <span>{c.targetLabel}</span>
+                                </li>
+                            ))}
+                            {node.degree > (node.connections?.length ?? 0) && (
+                                <li className="text-muted-foreground/70">+{node.degree - (node.connections?.length ?? 0)} more</li>
+                            )}
+                        </ul>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+}
+
 export const KnowledgeGraphExplorer: React.FC = () => {
     const containerRef = useRef<HTMLDivElement>(null);
     const cyRef = useRef<Core | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const [selectedNode, setSelectedNode] = useState<{ id: string; label: string; type: string } | null>(null);
+    const [selectedNode, setSelectedNode] = useState<SelectedNodeInfo | null>(null);
     const spaces = useAppStore((s) => s.spaces);
     const currentSpaceId = useAppStore((s) => s.currentSpaceId);
     const setCurrentSpaceId = useAppStore((s) => s.setCurrentSpaceId);
@@ -36,11 +102,42 @@ export const KnowledgeGraphExplorer: React.FC = () => {
                 cyRef.current = null;
             }
 
+            const nodeKind = (n: { nodeKind?: string }) => (n as { nodeKind?: string }).nodeKind ?? 'entity';
+            const entityType = (n: { type?: string }) => String((n as { type?: string }).type || 'Entity').trim();
+            const getNodeColor = (n: { nodeKind?: string; type?: string }) => {
+                const k = nodeKind(n);
+                if (k === 'user') return USER_COLOR;
+                if (k === 'memory') return MEMORY_COLOR;
+                const t = entityType(n);
+                return ENTITY_TYPE_COLORS[t] ?? ENTITY_TYPE_COLORS[t.charAt(0).toUpperCase() + t.slice(1).toLowerCase()] ?? DEFAULT_ENTITY_COLOR;
+            };
+
             const elements: ElementDefinition[] = [
-                ...nodes.map((n) => ({ data: { id: n.id, label: n.label, type: n.type } })),
-                ...edges.map((e, i) => ({
-                    data: { id: `e${i}`, source: e.source, target: e.target, relType: e.type },
-                })),
+                ...nodes.map((n) => {
+                    const k = nodeKind(n);
+                    return {
+                        data: {
+                            id: n.id,
+                            label: n.label,
+                            type: n.type,
+                            nodeKind: k,
+                            entityType: entityType(n),
+                            nodeColor: getNodeColor(n),
+                        },
+                    };
+                }),
+                ...edges.map((e, i) => {
+                    const t = (e.type && String(e.type).trim()) || '';
+                    return {
+                        data: {
+                            id: `e${i}`,
+                            source: e.source,
+                            target: e.target,
+                            relType: t,
+                            relLabel: t,
+                        },
+                    };
+                }),
             ];
 
             const cy = cytoscape({
@@ -57,30 +154,62 @@ export const KnowledgeGraphExplorer: React.FC = () => {
                             'text-margin-y': 4,
                             width: 24,
                             height: 24,
-                            'background-color': 'hsl(var(--primary))',
-                            color: 'hsl(var(--background))',
+                            'background-color': 'data(nodeColor)',
+                            color: '#111827',
                             'text-wrap': 'ellipsis',
                             'text-max-width': '80px',
                             'border-width': 2,
-                            'border-color': 'hsl(var(--primary) / 0.5)',
+                            'border-color': 'data(nodeColor)',
+                            shape: 'ellipse',
+                        },
+                    },
+                    {
+                        selector: 'node[nodeKind="user"]',
+                        style: {
+                            shape: 'diamond',
+                            width: 32,
+                            height: 32,
+                        },
+                    },
+                    {
+                        selector: 'node[nodeKind="memory"]',
+                        style: {
+                            shape: 'rectangle',
+                            width: 20,
+                            height: 20,
+                            'font-size': '8px',
                         },
                     },
                     {
                         selector: 'node:selected',
                         style: {
                             'border-width': 3,
-                            'border-color': 'hsl(var(--primary))',
-                            'background-color': 'hsl(var(--primary) / 0.9)',
+                            'border-color': '#3b82f6',
+                            'background-color': '#60a5fa',
                         },
                     },
                     {
                         selector: 'edge',
                         style: {
                             width: 1.5,
-                            'line-color': 'hsl(var(--muted-foreground) / 0.6)',
-                            'target-arrow-color': 'hsl(var(--muted-foreground) / 0.6)',
+                            'line-color': '#94a3b8',
+                            'target-arrow-color': '#94a3b8',
                             'target-arrow-shape': 'triangle',
                             'curve-style': 'bezier',
+                            label: 'data(relLabel)',
+                            'font-size': '9px',
+                            color: '#94a3b8',
+                            'text-rotation': 'autorotate',
+                        },
+                    },
+                    {
+                        selector: 'edge[relType="CONTAINS_ENTITY"]',
+                        style: {
+                            'line-color': '#64748b',
+                            'target-arrow-color': '#64748b',
+                            width: 1,
+                            'target-arrow-shape': 'none',
+                            label: '',
                         },
                     },
                 ],
@@ -98,7 +227,28 @@ export const KnowledgeGraphExplorer: React.FC = () => {
             cy.on('tap', 'node', (evt) => {
                 const n = evt.target;
                 const data = n.data();
-                setSelectedNode({ id: data.id, label: data.label, type: data.type });
+                const connectedEdges = n.connectedEdges();
+                const connections: { relType: string; targetLabel: string; direction: 'in' | 'out' }[] = [];
+                connectedEdges.forEach((edge: EdgeSingular) => {
+                    const relType = edge.data('relType') || 'RELATED_TO';
+                    const source = edge.source();
+                    const target = edge.target();
+                    const other = source.id() === data.id ? target : source;
+                    const direction = target.id() === data.id ? 'in' : 'out';
+                    connections.push({
+                        relType,
+                        targetLabel: other.data('label') || other.id(),
+                        direction,
+                    });
+                });
+                setSelectedNode({
+                    id: data.id,
+                    label: data.label,
+                    type: data.type,
+                    nodeKind: data.nodeKind,
+                    degree: connectedEdges.length,
+                    connections: connections.slice(0, 12),
+                });
             });
             cy.on('tap', (evt) => {
                 if (evt.target === cy) setSelectedNode(null);
@@ -195,10 +345,7 @@ export const KnowledgeGraphExplorer: React.FC = () => {
 
             {/* Selected node detail */}
             {selectedNode && (
-                <div className="p-3 border-t border-border/50 bg-muted/20 text-xs shrink-0">
-                    <span className="font-semibold text-foreground">{selectedNode.label}</span>
-                    <span className="text-muted-foreground ml-2">({selectedNode.type})</span>
-                </div>
+                <SelectedNodePanel node={selectedNode} />
             )}
         </div>
     );

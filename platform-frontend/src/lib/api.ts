@@ -111,7 +111,7 @@ export const api = {
     },
 
     /** P11 §11.2: Knowledge graph explorer — fetch subgraph (entities + relationships) for visualization. */
-    getGraphExplore: async (space_id?: string | null, limit?: number): Promise<{ nodes: { id: string; label: string; type: string }[]; edges: { source: string; target: string; type: string }[] }> => {
+    getGraphExplore: async (space_id?: string | null, limit?: number): Promise<{ nodes: { id: string; label: string; type: string; nodeKind?: 'entity' | 'user' | 'memory' }[]; edges: { source: string; target: string; type: string }[] }> => {
         const params: Record<string, string | number> = {};
         if (space_id) params.space_id = space_id;
         if (limit) params.limit = limit;

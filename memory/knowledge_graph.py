@@ -1927,8 +1927,10 @@ class KnowledgeGraph:
     ) -> Dict[str, Any]:
         """
         Return nodes and edges for the knowledge graph explorer UI.
+        Includes: Entity nodes, User node, Memory nodes;
+        Entity-Entity (no self-loops), User-Entity, Memory-Entity edges.
         Scoped by user's memories; optionally filtered by space_id.
-        Returns { "nodes": [ { id, label, type, ... } ], "edges": [ { source, target, type } ] }.
+        Returns { "nodes": [ { id, label, type, nodeKind } ], "edges": [ { source, target, type } ] }.
         """
         if not self._enabled or not user_id:
             return {"nodes": [], "edges": []}
@@ -1942,7 +1944,6 @@ class KnowledgeGraph:
             MATCH (m)-[:IN_SPACE]->(sp:Space {space_id: $space_id})
             """
 
-        # Two-step: (1) get entities from user's memories, (2) get relationships between them
         rel_types = "|".join(sorted(ENTITY_REL_TYPES) + ["RELATED_TO"])
 
         entity_query = f"""
@@ -1954,39 +1955,98 @@ class KnowledgeGraph:
             RETURN e.id AS id, e.type AS type, e.name AS name
             """
         entities = self._run_query(entity_query, params)
-        if not entities:
-            return {"nodes": [], "edges": []}
-
         entity_ids = [e["id"] for e in entities if e.get("id")]
-        if not entity_ids:
-            return {"nodes": [], "edges": []}
 
-        placeholders = ", ".join([f"$id{i}" for i in range(len(entity_ids))])
-        rel_list = rel_types.split("|")
-        params2 = {f"id{i}": eid for i, eid in enumerate(entity_ids)}
-        params2["rel_list"] = rel_list
+        nodes: List[Dict[str, Any]] = []
+        edges: List[Dict[str, Any]] = []
 
-        edges_query = f"""
-            MATCH (a:Entity)-[r]->(b:Entity)
-            WHERE a.id IN [{placeholders}] AND b.id IN [{placeholders}]
-              AND type(r) IN $rel_list
-            RETURN a.id AS source, b.id AS target, type(r) AS type
-            """
-        edges_raw = self._run_query(edges_query, params2)
-
-        nodes = [
-            {
+        # 1. Entity nodes
+        for e in entities:
+            nodes.append({
                 "id": e["id"],
                 "label": e.get("name") or e["id"],
                 "type": e.get("type") or "Entity",
-            }
-            for e in entities
-        ]
-        edges = [
-            {"source": r["source"], "target": r["target"], "type": r.get("type") or "RELATED_TO"}
-            for r in edges_raw
-            if r.get("source") and r.get("target")
-        ]
+                "nodeKind": "entity",
+            })
+
+        if not entity_ids:
+            # Still add User node for empty graph
+            nodes.append({"id": "__user__", "label": "You", "type": "User", "nodeKind": "user"})
+            return {"nodes": nodes, "edges": []}
+
+        placeholders = ", ".join([f"$id{i}" for i in range(len(entity_ids))])
+        params2 = {f"id{i}": eid for i, eid in enumerate(entity_ids)}
+        params2["user_id"] = user_id
+        params2["rel_list"] = rel_types.split("|")
+        params2["user_rel_list"] = list(USER_ENTITY_REL_TYPES)
+
+        # 2. Entity-Entity edges (exclude self-loops)
+        ee_query = f"""
+            MATCH (a:Entity)-[r]->(b:Entity)
+            WHERE a.id IN [{placeholders}] AND b.id IN [{placeholders}]
+              AND a.id <> b.id
+              AND type(r) IN $rel_list
+            RETURN a.id AS source, b.id AS target, type(r) AS type
+            """
+        for r in self._run_query(ee_query, params2):
+            if r.get("source") and r.get("target"):
+                edges.append({"source": r["source"], "target": r["target"], "type": r.get("type") or "RELATED_TO"})
+
+        # 3. User node + User-Entity edges
+        nodes.append({"id": "__user__", "label": "You", "type": "User", "nodeKind": "user"})
+        ue_query = f"""
+            MATCH (u:User {{user_id: $user_id}})-[r]->(e:Entity)
+            WHERE e.id IN [{placeholders}] AND type(r) IN $user_rel_list
+            RETURN e.id AS target, type(r) AS type
+            """
+        for r in self._run_query(ue_query, params2):
+            if r.get("target"):
+                edges.append({"source": "__user__", "target": r["target"], "type": r.get("type") or "KNOWS"})
+
+        # 4. Memory nodes + Memory-Entity (CONTAINS_ENTITY) edges
+        params3: Dict[str, Any] = {"user_id": user_id, "mem_limit": min(80, limit)}
+        mem_space_filter = ""
+        if space_id and space_id != SPACE_ID_GLOBAL:
+            params3["space_id"] = space_id
+            mem_space_filter = "\n            MATCH (m)-[:IN_SPACE]->(sp:Space {space_id: $space_id})"
+        mem_query = f"""
+            MATCH (u:User {{user_id: $user_id}})-[:HAS_MEMORY]->(m:Memory)-[:CONTAINS_ENTITY]->(e:Entity)
+            {mem_space_filter}
+            WITH m, e
+            ORDER BY m.created_at DESC
+            WITH m, collect(DISTINCT e.id) AS entity_ids
+            WITH DISTINCT m
+            LIMIT $mem_limit
+            RETURN m.id AS id
+            """
+        memories = self._run_query(mem_query, params3)
+        mem_ids = [r["id"] for r in memories if r.get("id")]
+        seen_mem: Set[str] = set()
+        for m in memories:
+            mid = m.get("id")
+            if mid and mid not in seen_mem:
+                seen_mem.add(mid)
+                short_id = str(mid)[:8] + "…" if len(str(mid)) > 8 else str(mid)
+                nodes.append({
+                    "id": mid,
+                    "label": f"Mem {short_id}",
+                    "type": "Memory",
+                    "nodeKind": "memory",
+                })
+
+        if mem_ids:
+            mem_ph = ", ".join([f"$mid{i}" for i in range(len(mem_ids))])
+            params4 = {f"mid{i}": mid for i, mid in enumerate(mem_ids)}
+            params4["eids"] = entity_ids
+            me_query = f"""
+                MATCH (m:Memory)-[:CONTAINS_ENTITY]->(e:Entity)
+                WHERE m.id IN [{mem_ph}] AND e.id IN $eids
+                RETURN m.id AS source, e.id AS target
+                """
+            for r in self._run_query(me_query, params4):
+                if r.get("source") and r.get("target"):
+                    edges.append({"source": r["source"], "target": r["target"], "type": "CONTAINS_ENTITY"})
+
         return {"nodes": nodes, "edges": edges}
 
 
