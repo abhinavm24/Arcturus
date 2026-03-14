@@ -6,7 +6,7 @@ Update **§2 Status at a glance** and **§8 Remaining / next steps** as work pro
 
 **Do not modify:** `P11_DELIVERY_README.md` (required by project; keep as-is).
 
-**Original sources (attribution only):** `P11_EXPLANATION.md`, `P11_DELIVERY_README.md`, `P11_NEO4J_KNOWLEDGE_GRAPH_DESIGN.md`, `p11_unified_extraction_design.md`.
+**Original sources (attribution only):** `P11_EXPLANATION.md`, `P11_DELIVERY_README.md`, `P11_NEO4J_KNOWLEDGE_GRAPH_DESIGN.md`, `p11_unified_extraction_design.md`, `P11_mnemo_real_time_memory_knowledge_graph.md`.
 
 ---
 
@@ -590,5 +590,48 @@ Items deferred from Phase 3 Spaces or from Phase 5; to consider after Phase 5. *
 | Real-time indexing benchmark (Phase 5D) | `scripts/benchmark_realtime_indexing.py` — validates ~100 ms time-to-searchable |
 | Delivery checklist (fixed) | `CAPSTONE/project_charters/P11_DELIVERY_README.md` |
 | Setup (Qdrant, Neo4j) | `CAPSTONE/project_charters/P11_mnemo_SETUP_GUIDE.md` |
+
+---
+
+## 11. Original Charter Gap Analysis (from P11_mnemo_real_time_memory_knowledge_graph.md)
+
+Gap analysis between the original charter and current implementation. Reference: `P11_mnemo_real_time_memory_knowledge_graph.md`.
+
+### 11.1 Implemented (charter-aligned)
+
+| Charter section | Original goal | Status |
+|-----------------|---------------|--------|
+| **11.1** | FAISS → Qdrant/Weaviate | ✅ Done |
+| **11.1** | Real-time indexing within 100ms | ✅ Phase 5D done |
+| **11.1** | Hybrid search (vector + keyword + metadata) | ✅ Phase 5C: BM25 + vector (RRF) |
+| **11.2** | Entity extraction, relationship mapping | ✅ Done |
+| **11.2** | Temporal awareness (superseded facts) | ✅ SUPERSEDES, first_seen_at, last_confirmed_at |
+| **11.3** | Personal spaces, shared spaces, auto-organization, templates | ✅ Done |
+| **11.4** | CRDT-style sync, offline-first, selective sync | ✅ LWW sync engine |
+| **11.5** | Importance scoring, decay/archival, contradiction, privacy | ✅ Done |
+| **11.6** | vector_store.py, knowledge_graph.py, lifecycle.py | ✅ Done |
+| **11.6** | Episodic memory migration | ✅ Phase 5B done |
+
+### 11.2 Gaps / Deferred vs original charter
+
+| Charter section | Original goal | Current status |
+|-----------------|---------------|----------------|
+| **11.1** | Per-user shards with cross-user federated search (for shared spaces) | ⏳ Future (see §8.9 item 8) |
+| **11.2** | Graph query API for agent reasoning: "What do I know about X and how does it relate to Y?" | ⏳ No explicit graph query API; retrieval uses expansion but no dedicated structured-reasoning endpoint |
+| **11.2** | Interactive knowledge graph explorer (frontend) | ⏳ Deferred (see §8.6b, §8.9) |
+| **11.3** | Spaces manager (frontend) | ⏳ Partial; SpacesPanel exists; full manager UI deferred (§8.6b) |
+| **11.6** | `memory/spaces.py`, `memory/sync.py` | Architecture differs: space logic in knowledge_graph + remme; sync in `memory/sync/` |
+| **11.6** | Frontend: `features/memory/` — graph explorer, spaces manager, memory browser | ⏳ Memory browser and SpacesPanel exist; graph explorer and full spaces manager deferred |
+
+### 11.3 Mandatory test gate (Expanded Contract)
+
+The original charter defines 10 hard conditions. Current status:
+
+- **Acceptance (conditions 1–5):** Structural tests in place; verify ≥8 acceptance cases, and explicit coverage for memory ingestion, retrieval ranking, contradiction handling, and lifecycle archival.
+- **Integration (conditions 6–8):** Verify ≥5 integration scenarios; Mnemo retrieval affects Planner/Oracle *before* plan generation; cross-project failure propagation tested.
+- **CI (condition 9):** `p11-mnemo-memory` runs acceptance + integration + baseline regression + lint.
+- **Delivery (condition 10):** P11_DELIVERY_README.md required; P95 < 250ms target — benchmark in place (39.8 ms PASS).
+
+---
 
 **Continue in a new chat:** Attach this file only and say: *"Continue from P11_UNIFIED_REFERENCE.md"* or *"Implement [Phase 4 Sync Engine] from §8.5"* or *"Implement [Phase 5 items] from §8.8."*
