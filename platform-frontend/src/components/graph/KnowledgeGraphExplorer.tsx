@@ -1,27 +1,28 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import cytoscape, { type Core, type EdgeSingular, type ElementDefinition } from 'cytoscape';
+import { DataSet } from 'vis-data';
+import { Network } from 'vis-network';
 import { useAppStore } from '@/store';
 import { api } from '@/lib/api';
-import { Network, RefreshCw, ZoomIn, ZoomOut, Loader2, AlertCircle } from 'lucide-react';
+import { Network as NetworkIcon, RefreshCw, ZoomIn, ZoomOut, Loader2, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 
 const LIMIT = 150;
 
-/** Colors for entity types — use concrete HSL (Cytoscape doesn't support CSS variables). */
+/** Colors for entity types */
 const ENTITY_TYPE_COLORS: Record<string, string> = {
-    Person: 'hsl(210, 70%, 45%)',
-    Company: 'hsl(280, 60%, 45%)',
-    City: 'hsl(30, 70%, 45%)',
-    Place: 'hsl(140, 50%, 40%)',
-    Concept: 'hsl(0, 60%, 45%)',
-    Date: 'hsl(45, 80%, 45%)',
-    Entity: 'hsl(220, 60%, 50%)',
+    Person: '#3b82f6',
+    Company: '#8b5cf6',
+    City: '#f97316',
+    Place: '#22c55e',
+    Concept: '#ef4444',
+    Date: '#eab308',
+    Entity: '#6366f1',
 };
-const DEFAULT_ENTITY_COLOR = 'hsl(220, 60%, 50%)';
-const USER_COLOR = 'hsl(173, 58%, 39%)';
-const MEMORY_COLOR = 'hsl(0, 0%, 52%)';
+const DEFAULT_ENTITY_COLOR = '#6366f1';
+const USER_COLOR = '#0d9488';
+const MEMORY_COLOR = '#64748b';
 
 interface SelectedNodeInfo {
     id: string;
@@ -77,7 +78,9 @@ function SelectedNodePanel({ node }: { node: SelectedNodeInfo }) {
 
 export const KnowledgeGraphExplorer: React.FC = () => {
     const containerRef = useRef<HTMLDivElement>(null);
-    const cyRef = useRef<Core | null>(null);
+    const networkRef = useRef<Network | null>(null);
+    const nodesRef = useRef<DataSet<Record<string, unknown>>>(new DataSet<Record<string, unknown>>([]));
+    const edgesRef = useRef<DataSet<Record<string, unknown>>>(new DataSet<Record<string, unknown>>([]));
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [selectedNode, setSelectedNode] = useState<SelectedNodeInfo | null>(null);
@@ -85,6 +88,23 @@ export const KnowledgeGraphExplorer: React.FC = () => {
     const currentSpaceId = useAppStore((s) => s.currentSpaceId);
     const setCurrentSpaceId = useAppStore((s) => s.setCurrentSpaceId);
     const fetchSpaces = useAppStore((s) => s.fetchSpaces);
+
+    const nodeKind = (n: { nodeKind?: string }) => (n as { nodeKind?: string }).nodeKind ?? 'entity';
+    const entityType = (n: { type?: string }) => String((n as { type?: string }).type || 'Entity').trim();
+    const getNodeColor = (n: { nodeKind?: string; type?: string }) => {
+        const k = nodeKind(n);
+        if (k === 'user') return USER_COLOR;
+        if (k === 'memory') return MEMORY_COLOR;
+        const t = entityType(n);
+        return ENTITY_TYPE_COLORS[t] ?? ENTITY_TYPE_COLORS[t.charAt(0).toUpperCase() + t.slice(1).toLowerCase()] ?? DEFAULT_ENTITY_COLOR;
+    };
+
+    const getNodeShape = (n: { nodeKind?: string }) => {
+        const k = nodeKind(n);
+        if (k === 'user') return 'diamond';
+        if (k === 'memory') return 'box';
+        return 'dot';
+    };
 
     const fetchAndRender = useCallback(async () => {
         setLoading(true);
@@ -96,165 +116,97 @@ export const KnowledgeGraphExplorer: React.FC = () => {
             );
             if (!containerRef.current) return;
 
-            // Destroy previous instance
-            if (cyRef.current) {
-                cyRef.current.destroy();
-                cyRef.current = null;
-            }
-
-            const nodeKind = (n: { nodeKind?: string }) => (n as { nodeKind?: string }).nodeKind ?? 'entity';
-            const entityType = (n: { type?: string }) => String((n as { type?: string }).type || 'Entity').trim();
-            const getNodeColor = (n: { nodeKind?: string; type?: string }) => {
+            const visNodes = nodes.map((n) => {
                 const k = nodeKind(n);
-                if (k === 'user') return USER_COLOR;
-                if (k === 'memory') return MEMORY_COLOR;
-                const t = entityType(n);
-                return ENTITY_TYPE_COLORS[t] ?? ENTITY_TYPE_COLORS[t.charAt(0).toUpperCase() + t.slice(1).toLowerCase()] ?? DEFAULT_ENTITY_COLOR;
-            };
-
-            const elements: ElementDefinition[] = [
-                ...nodes.map((n) => {
-                    const k = nodeKind(n);
-                    return {
-                        data: {
-                            id: n.id,
-                            label: n.label,
-                            type: n.type,
-                            nodeKind: k,
-                            entityType: entityType(n),
-                            nodeColor: getNodeColor(n),
-                        },
-                    };
-                }),
-                ...edges.map((e, i) => {
-                    const t = (e.type && String(e.type).trim()) || '';
-                    return {
-                        data: {
-                            id: `e${i}`,
-                            source: e.source,
-                            target: e.target,
-                            relType: t,
-                            relLabel: t,
-                        },
-                    };
-                }),
-            ];
-
-            const cy = cytoscape({
-                container: containerRef.current,
-                elements,
-                style: [
-                    {
-                        selector: 'node',
-                        style: {
-                            label: 'data(label)',
-                            'text-valign': 'bottom',
-                            'text-halign': 'center',
-                            'font-size': '10px',
-                            'text-margin-y': 4,
-                            width: 24,
-                            height: 24,
-                            'background-color': 'data(nodeColor)',
-                            color: '#111827',
-                            'text-wrap': 'ellipsis',
-                            'text-max-width': '80px',
-                            'border-width': 2,
-                            'border-color': 'data(nodeColor)',
-                            shape: 'ellipse',
-                        },
-                    },
-                    {
-                        selector: 'node[nodeKind="user"]',
-                        style: {
-                            shape: 'diamond',
-                            width: 32,
-                            height: 32,
-                        },
-                    },
-                    {
-                        selector: 'node[nodeKind="memory"]',
-                        style: {
-                            shape: 'rectangle',
-                            width: 20,
-                            height: 20,
-                            'font-size': '8px',
-                        },
-                    },
-                    {
-                        selector: 'node:selected',
-                        style: {
-                            'border-width': 3,
-                            'border-color': '#3b82f6',
-                            'background-color': '#60a5fa',
-                        },
-                    },
-                    {
-                        selector: 'edge',
-                        style: {
-                            width: 1.5,
-                            'line-color': '#94a3b8',
-                            'target-arrow-color': '#94a3b8',
-                            'target-arrow-shape': 'triangle',
-                            'curve-style': 'bezier',
-                            label: 'data(relLabel)',
-                            'font-size': '9px',
-                            color: '#94a3b8',
-                            'text-rotation': 'autorotate',
-                        },
-                    },
-                    {
-                        selector: 'edge[relType="CONTAINS_ENTITY"]',
-                        style: {
-                            'line-color': '#64748b',
-                            'target-arrow-color': '#64748b',
-                            width: 1,
-                            'target-arrow-shape': 'none',
-                            label: '',
-                        },
-                    },
-                ],
-                layout: {
-                    name: 'cose',
-                    idealEdgeLength: 80,
-                    nodeOverlap: 20,
-                    padding: 40,
-                },
-                minZoom: 0.2,
-                maxZoom: 3,
-                wheelSensitivity: 0.3,
+                const color = getNodeColor(n);
+                const size = k === 'user' ? 20 : k === 'memory' ? 14 : 16;
+                return {
+                    id: n.id,
+                    label: n.label,
+                    type: n.type,
+                    nodeKind: k,
+                    color: { background: color, border: color },
+                    shape: getNodeShape(n),
+                    size,
+                    font: { color: '#111827', size: k === 'memory' ? 10 : 12 },
+                };
             });
 
-            cy.on('tap', 'node', (evt) => {
-                const n = evt.target;
-                const data = n.data();
-                const connectedEdges = n.connectedEdges();
-                const connections: { relType: string; targetLabel: string; direction: 'in' | 'out' }[] = [];
-                connectedEdges.forEach((edge: EdgeSingular) => {
-                    const relType = edge.data('relType') || 'RELATED_TO';
-                    const source = edge.source();
-                    const target = edge.target();
-                    const other = source.id() === data.id ? target : source;
-                    const direction = target.id() === data.id ? 'in' : 'out';
-                    connections.push({
-                        relType,
-                        targetLabel: other.data('label') || other.id(),
-                        direction,
+            const visEdges = edges.map((e, i) => {
+                const t = (e.type && String(e.type).trim()) || '';
+                const isContains = t === 'CONTAINS_ENTITY';
+                return {
+                    id: `e${i}`,
+                    from: e.source,
+                    to: e.target,
+                    relType: t,
+                    label: isContains ? '' : t,
+                    arrows: isContains ? undefined : { to: { enabled: true } },
+                    width: isContains ? 1 : 1.5,
+                    color: { color: '#94a3b8' },
+                    font: t ? { size: 11, color: '#64748b' } : undefined,
+                };
+            });
+
+            nodesRef.current.clear();
+            edgesRef.current.clear();
+            nodesRef.current.add(visNodes);
+            edgesRef.current.add(visEdges);
+
+            if (!networkRef.current) {
+                const network = new Network(
+                    containerRef.current,
+                    { nodes: nodesRef.current, edges: edgesRef.current },
+                    {
+                        physics: {
+                            enabled: true,
+                            barnesHut: {
+                                gravitationalConstant: -3000,
+                                springLength: 120,
+                                springConstant: 0.04,
+                            },
+                        },
+                        interaction: { hover: true, zoomView: true, dragView: true },
+                        nodes: { borderWidth: 2 },
+                    }
+                );
+
+                network.on('click', (params) => {
+                    const nodeIds = params.nodes;
+                    if (nodeIds.length === 0) {
+                        setSelectedNode(null);
+                        return;
+                    }
+                    const nodeId = nodeIds[0];
+                    const node = nodesRef.current.get(nodeId) as unknown as { id: string; label: string; type?: string; nodeKind?: string } | undefined;
+                    if (!node) return;
+
+                    const allEdges = edgesRef.current.get() as unknown as { from: string; to: string; relType?: string }[];
+                    const connectedEdges = allEdges.filter((e) => e.from === nodeId || e.to === nodeId);
+                    const connections: { relType: string; targetLabel: string; direction: 'in' | 'out' }[] = [];
+                    connectedEdges.forEach((edge: { from: string; to: string; relType?: string }) => {
+                        const otherId = edge.from === nodeId ? edge.to : edge.from;
+                        const other = nodesRef.current.get(otherId) as { label?: string } | undefined;
+                        const direction = edge.to === nodeId ? ('in' as const) : ('out' as const);
+                        connections.push({
+                            relType: edge.relType || 'RELATED_TO',
+                            targetLabel: other?.label ?? otherId,
+                            direction,
+                        });
+                    });
+
+                    setSelectedNode({
+                        id: node.id,
+                        label: node.label,
+                        type: node.type ?? 'Entity',
+                        nodeKind: node.nodeKind,
+                        degree: connectedEdges.length,
+                        connections: connections.slice(0, 12),
                     });
                 });
-                setSelectedNode({
-                    id: data.id,
-                    label: data.label,
-                    type: data.type,
-                    nodeKind: data.nodeKind,
-                    degree: connectedEdges.length,
-                    connections: connections.slice(0, 12),
-                });
-            });
-            cy.on('tap', (evt) => {
-                if (evt.target === cy) setSelectedNode(null);
-            });
 
-            cyRef.current = cy;
+                networkRef.current = network;
+            }
         } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : 'Failed to load graph';
             setError(msg);
@@ -270,16 +222,24 @@ export const KnowledgeGraphExplorer: React.FC = () => {
     useEffect(() => {
         fetchAndRender();
         return () => {
-            if (cyRef.current) {
-                cyRef.current.destroy();
-                cyRef.current = null;
-            }
+            networkRef.current?.destroy();
+            networkRef.current = null;
         };
     }, [fetchAndRender]);
 
-    const handleZoomIn = () => cyRef.current?.zoom(cyRef.current.zoom() * 1.2);
-    const handleZoomOut = () => cyRef.current?.zoom(cyRef.current.zoom() / 1.2);
-    const handleFit = () => cyRef.current?.fit(undefined, 40);
+    const handleZoomIn = () => {
+        const n = networkRef.current;
+        if (!n) return;
+        const scale = n.getScale();
+        n.moveTo({ scale: Math.min(scale * 1.3, 3) });
+    };
+    const handleZoomOut = () => {
+        const n = networkRef.current;
+        if (!n) return;
+        const scale = n.getScale();
+        n.moveTo({ scale: Math.max(scale / 1.3, 0.3) });
+    };
+    const handleFit = () => networkRef.current?.fit();
 
     return (
         <div className="h-full flex flex-col bg-background">
@@ -309,7 +269,7 @@ export const KnowledgeGraphExplorer: React.FC = () => {
                         <ZoomOut className="w-4 h-4" />
                     </Button>
                     <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleFit} title="Fit">
-                        <Network className="w-4 h-4" />
+                        <NetworkIcon className="w-4 h-4" />
                     </Button>
                     <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleZoomIn} title="Zoom in">
                         <ZoomIn className="w-4 h-4" />
@@ -317,7 +277,7 @@ export const KnowledgeGraphExplorer: React.FC = () => {
                 </div>
             </div>
 
-            {/* Graph canvas / content */}
+            {/* Graph canvas */}
             <div className="flex-1 min-h-0 relative">
                 {loading && (
                     <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-background/80">
@@ -343,10 +303,7 @@ export const KnowledgeGraphExplorer: React.FC = () => {
                 />
             </div>
 
-            {/* Selected node detail */}
-            {selectedNode && (
-                <SelectedNodePanel node={selectedNode} />
-            )}
+            {selectedNode && <SelectedNodePanel node={selectedNode} />}
         </div>
     );
 };
