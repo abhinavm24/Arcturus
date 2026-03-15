@@ -80,8 +80,8 @@ interface SettingsSlice {
 interface RagViewerSlice {
     viewMode: 'graph' | 'rag' | 'explorer';
     setViewMode: (mode: 'graph' | 'rag' | 'explorer') => void;
-    sidebarTab: 'runs' | 'rag' | 'notes' | 'mcp' | 'remme' | 'explorer' | 'apps' | 'news' | 'learn' | 'settings' | 'ide' | 'scheduler' | 'console' | 'skills' | 'canvas' | 'studio' | 'admin' | 'echo';
-    setSidebarTab: (tab: 'runs' | 'rag' | 'notes' | 'mcp' | 'remme' | 'explorer' | 'apps' | 'news' | 'learn' | 'settings' | 'ide' | 'scheduler' | 'console' | 'skills' | 'canvas' | 'studio' | 'admin' | 'echo') => void;
+    sidebarTab: 'runs' | 'rag' | 'notes' | 'mcp' | 'remme' | 'explorer' | 'apps' | 'news' | 'learn' | 'settings' | 'ide' | 'scheduler' | 'console' | 'skills' | 'canvas' | 'studio' | 'admin' | 'echo' | 'swarm';
+    setSidebarTab: (tab: 'runs' | 'rag' | 'notes' | 'mcp' | 'remme' | 'explorer' | 'apps' | 'news' | 'learn' | 'settings' | 'ide' | 'scheduler' | 'console' | 'skills' | 'canvas' | 'studio' | 'admin' | 'echo' | 'swarm') => void;
     isSidebarSubPanelOpen: boolean;
     setSidebarSubPanelOpen: (open: boolean) => void;
     toggleSidebarSubPanel: () => void;
