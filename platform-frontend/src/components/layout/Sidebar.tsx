@@ -28,7 +28,7 @@ import { SwarmSidebar } from '@/features/swarm/SwarmSidebar';
 const NavIcon = ({ icon: Icon, label, tab, active, onClick }: {
     icon: any,
     label: string,
-    tab?: 'runs' | 'spaces' | 'rag' | 'notes' | 'mcp' | 'remme' | 'explorer' | 'apps' | 'news' | 'learn' | 'settings' | 'ide' | 'scheduler' | 'console' | 'skills' | 'canvas' | 'studio' | 'admin' | 'echo' | 'swarm',
+    tab?: 'runs' | 'rag' | 'notes' | 'mcp' | 'remme' | 'explorer' | 'apps' | 'news' | 'learn' | 'settings' | 'ide' | 'scheduler' | 'console' | 'skills' | 'canvas' | 'studio' | 'admin' | 'echo' | 'swarm',
     active: boolean,
     onClick: () => void
 }) => {
@@ -108,12 +108,7 @@ export const Sidebar: React.FC<{ hideSubPanel?: boolean }> = ({ hideSubPanel }) 
         fetchRuns();
     }, [fetchRuns]);
 
-    // Spaces moved to header modal; redirect if persisted tab was 'spaces'
-    React.useEffect(() => {
-        if (sidebarTab === 'spaces') {
-            setSidebarTab('runs');
-        }
-    }, [sidebarTab, setSidebarTab]);
+    // Spaces moved to header modal; 'spaces' tab no longer exists in the type union
 
     const isNewRunOpen = useAppStore(state => state.isNewRunOpen);
     const setIsNewRunOpen = useAppStore(state => state.setIsNewRunOpen);
