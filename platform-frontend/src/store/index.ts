@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import axios from 'axios';
 import { persist } from 'zustand/middleware';
 import type {
     Run,
@@ -13,7 +14,7 @@ import type {
     ContextItem,
 } from '../types';
 import { applyNodeChanges, applyEdgeChanges, type NodeChange, type EdgeChange } from 'reactflow';
-import { api, API_BASE } from '../lib/api';
+import { api, API_BASE, AUTH_API_BASE } from '../lib/api';
 
 // --- Slices Types ---
 
@@ -80,8 +81,8 @@ interface SettingsSlice {
 interface RagViewerSlice {
     viewMode: 'graph' | 'rag' | 'explorer';
     setViewMode: (mode: 'graph' | 'rag' | 'explorer') => void;
-    sidebarTab: 'runs' | 'rag' | 'notes' | 'mcp' | 'remme' | 'explorer' | 'apps' | 'news' | 'learn' | 'settings' | 'ide' | 'scheduler' | 'console' | 'skills' | 'canvas' | 'studio' | 'admin' | 'echo' | 'swarm';
-    setSidebarTab: (tab: 'runs' | 'rag' | 'notes' | 'mcp' | 'remme' | 'explorer' | 'apps' | 'news' | 'learn' | 'settings' | 'ide' | 'scheduler' | 'console' | 'skills' | 'canvas' | 'studio' | 'admin' | 'echo' | 'swarm') => void;
+    sidebarTab: 'runs' | 'rag' | 'notes' | 'mcp' | 'remme' | 'explorer' | 'graph' | 'apps' | 'news' | 'learn' | 'settings' | 'ide' | 'scheduler' | 'console' | 'skills' | 'canvas' | 'studio' | 'admin' | 'echo' | 'swarm';
+    setSidebarTab: (tab: 'runs' | 'rag' | 'notes' | 'mcp' | 'remme' | 'explorer' | 'graph' | 'apps' | 'news' | 'learn' | 'settings' | 'ide' | 'scheduler' | 'console' | 'skills' | 'canvas' | 'studio' | 'admin' | 'echo' | 'swarm') => void;
     isSidebarSubPanelOpen: boolean;
     setSidebarSubPanelOpen: (open: boolean) => void;
     toggleSidebarSubPanel: () => void;
@@ -237,6 +238,8 @@ interface RemmeSlice {
     addMemory: (text: string, category?: string, space_id?: string | null) => Promise<void>;
     deleteMemory: (id: string) => Promise<void>;
     cleanupDanglingMemories: () => Promise<void>;
+    /** Phase E 4.2: Suggest space for memory text (optional current space). */
+    recommendSpace: (text: string, current_space_id?: string | null) => Promise<{ recommended_space_id: string; reason?: string }>;
 }
 
 // Phase 4: Spaces (Perplexity-style project hubs)
@@ -244,7 +247,7 @@ interface SpacesSlice {
     spaces: Space[];
     currentSpaceId: string | null;
     fetchSpaces: () => Promise<void>;
-    createSpace: (name: string, description?: string, sync_policy?: 'sync' | 'local_only') => Promise<Space>;
+    createSpace: (name: string, description?: string, sync_policy?: 'sync' | 'local_only' | 'shared') => Promise<Space>;
     setCurrentSpaceId: (spaceId: string | null) => void;
     isSpacesModalOpen: boolean;
     setIsSpacesModalOpen: (open: boolean) => void;
@@ -470,11 +473,87 @@ interface StudioSlice {
     clearEditState: () => void;
 }
 
-interface AppState extends RunSlice, GraphSlice, WorkspaceSlice, ReplaySlice, SettingsSlice, RagViewerSlice, NotesSlice, IdeSlice, RemmeSlice, SpacesSlice, ExplorerSlice, AppsSlice, AgentTestSlice, NewsSlice, ChatSlice, ReviewSlice, InboxSlice, SchedulerSlice, EventBusSlice, StudioSlice { }
+interface AuthSlice {
+    authUserId: string | null;
+    authToken: string | null;
+    authStatus: 'guest' | 'logged_in';
+    authUserFirstName: string | null;
+    authUserEmail: string | null;
+    setAuthUserId: (id: string | null, status: 'guest' | 'logged_in', token?: string, firstName?: string | null, email?: string | null) => void;
+    initAuth: () => void;
+    logoutAuth: () => void;
+    isAuthModalOpen: boolean;
+    setIsAuthModalOpen: (open: boolean) => void;
+}
+
+interface AppState extends RunSlice, GraphSlice, WorkspaceSlice, ReplaySlice, SettingsSlice, RagViewerSlice, NotesSlice, IdeSlice, RemmeSlice, SpacesSlice, ExplorerSlice, AppsSlice, AgentTestSlice, NewsSlice, ChatSlice, ReviewSlice, InboxSlice, SchedulerSlice, EventBusSlice, StudioSlice, AuthSlice { }
 
 export const useAppStore = create<AppState>()(
     persist(
         (set, get) => ({
+            // Auth Slice Implementation
+            authUserId: null,
+            authToken: null,
+            authStatus: 'guest',
+            authUserFirstName: null,
+            authUserEmail: null,
+            isAuthModalOpen: false,
+            setIsAuthModalOpen: (open) => set({ isAuthModalOpen: open }),
+            setAuthUserId: (id, status, token = undefined, firstName = undefined, email = undefined) => set({ 
+                authUserId: id, 
+                authStatus: status, 
+                authToken: token,
+                authUserFirstName: firstName,
+                authUserEmail: email
+            }),
+            initAuth: async () => {
+                const state = get();
+                if (state.authStatus === 'logged_in' && state.authUserId) return; // user is currently logged in
+                
+                const isLocalMigrationEnabled = import.meta.env.VITE_ENABLE_LOCAL_MIGRATION === 'true';
+                console.log('isLocalMigrationEnabled', isLocalMigrationEnabled);
+                // Try to fetch legacy guest ID if enabled, even if they already have a persisted random guest ID
+                if (isLocalMigrationEnabled && state.authStatus === 'guest') {
+                    try {
+                        const res = await axios.get(`${AUTH_API_BASE}/auth/legacy-guest-id`);
+                        if (res.data && res.data.guest_id) {
+                            const newGuestId = `guest_${res.data.guest_id}`;
+                            if (state.authUserId !== newGuestId) {
+                                set({ authUserId: newGuestId, authStatus: 'guest' });
+                            }
+                            return;
+                        }
+                    } catch (e) {
+                        console.log('[Auth] Could not fetch legacy guest ID, falling back to existing or random UUID', e);
+                    }
+                }
+                
+                // If we get here, either migration is disabled, or it failed to fetch.
+                // Ensure they at least have SOME guest ID if they don't already.
+                if (!state.authUserId) {
+                    const guestId = `guest_${crypto.randomUUID()}`;
+                    set({ authUserId: guestId, authStatus: 'guest' });
+                }
+            },
+            logoutAuth: async () => {
+                // Return to guest mode, try to fetch legacy ID first if local_migration is enabled
+                let guestId = `guest_${crypto.randomUUID()}`;
+                const isLocalMigrationEnabled = import.meta.env.VITE_ENABLE_LOCAL_MIGRATION === 'true';
+                console.log('isLocalMigrationEnabled', isLocalMigrationEnabled);
+                if (isLocalMigrationEnabled) {
+                    try {
+                        const res = await axios.get(`${AUTH_API_BASE}/auth/legacy-guest-id`);
+                        if (res.data && res.data.guest_id) {
+                            guestId = `guest_${res.data.guest_id}`;
+                        }
+                    } catch (e) {
+                        // silently fall back
+                    }
+                }
+                
+                set({ authUserId: guestId, authStatus: 'guest', authToken: null, authUserFirstName: null, authUserEmail: null });
+            },
+
             // Review Slice
             reviewRequest: null,
             reviewResolver: null,
@@ -1418,7 +1497,9 @@ export const useAppStore = create<AppState>()(
             fetchRagFiles: async () => {
                 set({ isRagLoading: true });
                 try {
-                    const res = await api.get(`${API_BASE}/rag/documents`);
+                    const spaceId = get().currentSpaceId;
+                    const params = spaceId ? { space_id: spaceId } : {};
+                    const res = await api.get(`${API_BASE}/rag/documents`, { params });
                     set({ ragFiles: res.data.files });
                 } catch (e) {
                     console.error("Failed to fetch RAG docs", e);
@@ -1471,9 +1552,11 @@ export const useAppStore = create<AppState>()(
             fetchNotesFiles: async () => {
                 set({ isNotesLoading: true });
                 try {
-                    const res = await api.get(`${API_BASE}/rag/documents`);
+                    const spaceId = get().currentSpaceId;
+                    const params = spaceId ? { space_id: spaceId } : {};
+                    const res = await api.get(`${API_BASE}/rag/documents`, { params });
                     const allFiles = res.data.files as any[];
-                    const notesRoot = allFiles.find(f => f.name === 'Notes' && f.type === 'folder');
+                    const notesRoot = allFiles.find((f: any) => f.name === 'Notes' && f.type === 'folder');
                     if (notesRoot && notesRoot.children) {
                         set({ notesFiles: notesRoot.children });
                     } else {
@@ -1505,13 +1588,16 @@ export const useAppStore = create<AppState>()(
             fetchMemories: async () => {
                 try {
                     const spaceId = get().currentSpaceId;
-                    const res = await api.getMemories(spaceId);
+                    // When Global (null), pass __global__ so backend returns only unscoped memories
+                    const filterSpaceId = spaceId ?? '__global__';
+                    const res = await api.getMemories(filterSpaceId);
                     set({ memories: res.memories });
                 } catch (e) {
                     console.error("Failed to fetch memories", e);
                 }
             },
             addMemory: async (text, category = "general", space_id) => {
+                console.log('[store] addMemory calling API', { text: text?.slice(0, 50), category, space_id });
                 try {
                     await api.addMemory(text, category, space_id);
                     get().fetchMemories();
@@ -1534,6 +1620,9 @@ export const useAppStore = create<AppState>()(
                 } catch (e) {
                     console.error("Failed to cleanup dangling memories", e);
                 }
+            },
+            recommendSpace: async (text, current_space_id) => {
+                return api.recommendSpace(text, current_space_id);
             },
 
             // --- Spaces Slice (Phase 4) ---
@@ -2483,6 +2572,12 @@ export const useAppStore = create<AppState>()(
                 explorerRootPath: state.explorerRootPath,
                 recentProjects: state.recentProjects,
                 currentSpaceId: state.currentSpaceId, // Phase 4: remember selected space
+                // Auth
+                authUserId: state.authUserId,
+                authStatus: state.authStatus,
+                authToken: state.authToken,
+                authUserFirstName: state.authUserFirstName,
+                authUserEmail: state.authUserEmail,
             }),
         }
     )

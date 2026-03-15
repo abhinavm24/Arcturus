@@ -18,10 +18,16 @@ from memory.sync.schema import PullRequest, PullResponse, PushRequest, PushRespo
 
 
 class _FakeStore:
-    """Minimal in-memory store for Device B so we can assert convergence without FAISS/Qdrant."""
+    """Minimal in-memory store for Device B (and server when mocked) so we can assert convergence without FAISS/Qdrant."""
 
     def __init__(self):
         self._memories: list[dict] = []
+
+    def get_scanned_run_ids(self):
+        return set()
+
+    def mark_run_scanned(self, run_id: str):
+        pass
 
     def get(self, memory_id: str):
         for m in self._memories:
@@ -103,7 +109,9 @@ class TestSyncTwoDevicesConverge:
     def client(self):
         from fastapi.testclient import TestClient
         from api import app
-        return TestClient(app)
+        # Auth required for /api/remme and /api/sync
+        AUTH_HEADERS = {"X-User-Id": "00000000-0000-0000-0000-000000000001"}
+        return TestClient(app, headers=AUTH_HEADERS)
 
     def _make_push_via_client(self, client, request: PushRequest) -> PushResponse:
         r = client.post("/api/sync/push", json=request.model_dump(mode="json"))
@@ -127,15 +135,22 @@ class TestSyncTwoDevicesConverge:
     def test_two_devices_push_then_pull_converge(self, client):
         """Device A adds memory and pushes; Device B pulls; B has the memory."""
         from memory.sync.engine import SyncEngine
-        from memory.sync.transport import pull_changes, push_changes
-        from memory.user_id import get_user_id
 
-        user_id = get_user_id()
+        user_id = "00000000-0000-0000-0000-000000000001"
         device_a = "device-a"
         device_b = "device-b"
 
-        # 1) Device A: add memory via API (server store gets it). Mock embedding so no Ollama in CI.
-        with patch("routers.remme.get_embedding", return_value=np.zeros(768, dtype=np.float32)):
+        # Use fake store for server (remme add + sync merge) so we avoid Qdrant
+        fake_server_store = _FakeStore()
+        fake_emb = np.zeros(768, dtype=np.float32)
+
+        with (
+            patch("shared.state.get_remme_store", return_value=fake_server_store),
+            patch("routers.remme.remme_store", fake_server_store),
+            patch("remme.utils.get_embedding", return_value=fake_emb),
+            patch("routers.remme.get_embedding", return_value=fake_emb),
+        ):
+            # 1) Device A: add memory via API (server store gets it)
             add_resp = client.post(
                 "/api/remme/add",
                 json={"text": "Integration test memory for sync converge.", "category": "general"},
@@ -154,39 +169,42 @@ class TestSyncTwoDevicesConverge:
         def pull_via_testclient(base_url: str, req: PullRequest, **kwargs):
             return self._make_pull_via_client(client, req)
 
-        with patch("memory.sync.engine.push_changes", side_effect=push_via_testclient):
-            with patch("memory.sync.engine.pull_changes", side_effect=pull_via_testclient):
-                # Engine A (server's store) pushes
-                store_a = None
-                try:
-                    from shared.state import get_remme_store
-                    store_a = get_remme_store()
-                except Exception:
-                    pytest.skip("remme store not available")
-                engine_a = SyncEngine(
-                    user_id=user_id,
-                    device_id=device_a,
-                    store=store_a,
-                    kg=None,
-                    get_embedding_fn=lambda t: np.zeros(768, dtype=np.float32),
-                )
-                push_resp = engine_a.push()
-                assert push_resp.accepted, push_resp.errors
+        with (
+            patch("shared.state.get_remme_store", return_value=fake_server_store),
+            patch("remme.utils.get_embedding", return_value=fake_emb),
+            patch("memory.sync.engine.push_changes", side_effect=push_via_testclient),
+            patch("memory.sync.engine.pull_changes", side_effect=pull_via_testclient),
+        ):
+            # Engine A uses same fake store (get_remme_store returns it)
+            store_a = fake_server_store
+            engine_a = SyncEngine(
+                user_id=user_id,
+                device_id=device_a,
+                store=store_a,
+                kg=None,
+                get_embedding_fn=lambda t: np.zeros(768, dtype=np.float32),
+            )
+            push_resp = engine_a.push()
+            assert push_resp.accepted, push_resp.errors
 
         # 3) Device B: separate store, pull from server, apply
         store_b = _FakeStore()
         assert len(store_b.get_all()) == 0
 
-        with patch("memory.sync.engine.push_changes", side_effect=push_via_testclient):
-            with patch("memory.sync.engine.pull_changes", side_effect=pull_via_testclient):
-                engine_b = SyncEngine(
-                    user_id=user_id,
-                    device_id=device_b,
-                    store=store_b,
-                    kg=None,
-                    get_embedding_fn=lambda t: np.zeros(768, dtype=np.float32),
-                )
-                pull_resp = engine_b.pull()
+        with (
+            patch("shared.state.get_remme_store", return_value=fake_server_store),
+            patch("remme.utils.get_embedding", return_value=fake_emb),
+            patch("memory.sync.engine.push_changes", side_effect=push_via_testclient),
+            patch("memory.sync.engine.pull_changes", side_effect=pull_via_testclient),
+        ):
+            engine_b = SyncEngine(
+                user_id=user_id,
+                device_id=device_b,
+                store=store_b,
+                kg=None,
+                get_embedding_fn=lambda t: np.zeros(768, dtype=np.float32),
+            )
+            pull_resp = engine_b.pull()
 
         # 4) Converge: B's store should have the memory (same text)
         all_b = store_b.get_all()
@@ -196,9 +214,8 @@ class TestSyncTwoDevicesConverge:
     def test_two_devices_B_pushes_A_receives_via_pull(self, client):
         """Device B has a memory and pushes; server store gets it (convergence to server)."""
         from memory.sync.engine import SyncEngine
-        from memory.user_id import get_user_id
 
-        user_id = get_user_id()
+        user_id = "00000000-0000-0000-0000-000000000001"
         device_b = "device-b"
         text_b = "Device B only memory for sync integration test."
 
@@ -239,9 +256,8 @@ class TestSyncTwoDevicesConverge:
     def test_apply_latency_typical_batch_under_100ms(self, client):
         """Charter 13.2: apply pulled changes in ≤100ms for typical batch (e.g. 5 memories)."""
         from memory.sync.engine import SyncEngine
-        from memory.user_id import get_user_id
 
-        user_id = get_user_id()
+        user_id = "00000000-0000-0000-0000-000000000001"
         store = _FakeStore()
         engine = SyncEngine(
             user_id=user_id,
@@ -276,9 +292,8 @@ class TestSyncTwoDevicesConverge:
     def test_load_three_devices_push_then_one_pull_converge(self, client):
         """Load: three devices each push a memory; one device pulls and has all three."""
         from memory.sync.engine import SyncEngine
-        from memory.user_id import get_user_id
 
-        user_id = get_user_id()
+        user_id = "00000000-0000-0000-0000-000000000001"
 
         def push_via_client(base_url: str, req: PushRequest, **kwargs):
             return self._make_push_via_client(client, req)
@@ -322,11 +337,17 @@ class TestSyncTwoDevicesConverge:
     def test_reconnection_second_pull_idempotent(self, client):
         """Reconnection: pull twice; second pull returns no new changes (or applies idempotently)."""
         from memory.sync.engine import SyncEngine
-        from memory.user_id import get_user_id
 
-        user_id = get_user_id()
-        # Add one memory and push. Mock embedding so no Ollama in CI.
-        with patch("routers.remme.get_embedding", return_value=np.zeros(768, dtype=np.float32)):
+        user_id = "00000000-0000-0000-0000-000000000001"
+        fake_server_store = _FakeStore()
+        fake_emb = np.zeros(768, dtype=np.float32)
+
+        with (
+            patch("shared.state.get_remme_store", return_value=fake_server_store),
+            patch("routers.remme.remme_store", fake_server_store),
+            patch("remme.utils.get_embedding", return_value=fake_emb),
+            patch("routers.remme.get_embedding", return_value=fake_emb),
+        ):
             add_resp = client.post(
                 "/api/remme/add",
                 json={"text": "Reconnection idempotent test memory.", "category": "general"},
@@ -339,11 +360,7 @@ class TestSyncTwoDevicesConverge:
         def pull_via_client(base_url: str, req: PullRequest, **kwargs):
             return self._make_pull_via_client(client, req)
 
-        try:
-            from shared.state import get_remme_store
-            store_a = get_remme_store()
-        except Exception:
-            pytest.skip("remme store not available")
+        store_a = fake_server_store
         with patch("memory.sync.engine.push_changes", side_effect=push_via_client):
             with patch("memory.sync.engine.pull_changes", side_effect=pull_via_client):
                 engine = SyncEngine(

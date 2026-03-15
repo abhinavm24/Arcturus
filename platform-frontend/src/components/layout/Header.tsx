@@ -4,7 +4,7 @@ import {
     LayoutGrid, Newspaper, GraduationCap, Settings, Plus,
     RefreshCw, Zap, Sparkles, X, FolderPlus, UploadCloud, Search,
     Loader2, ChevronLeft, Notebook, LayoutDashboard, Bell,
-    CalendarClock, Terminal, FolderOpen, Mic, Wand2, ShieldCheck, ShieldOff, Volume2, ChevronDown, Cloud
+    CalendarClock, Terminal, FolderOpen, User, Mic, Wand2, ShieldCheck, ShieldOff, Volume2, ChevronDown, Cloud
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,7 @@ import { ThemeToggle, useTheme } from '@/components/theme';
 import { ArcturusLogo } from '@/components/common/ArcturusLogo';
 import { StatsModal } from '@/components/stats/StatsModal';
 import { SpacesModal } from '@/components/sidebar/SpacesModal';
+import { AuthModal } from '@/components/auth/AuthModal';
 
 const TAB_CONFIG: Record<string, { label: string; icon: any; color: string; subtitleSuffix: string }> = {
     runs: { label: 'Agent Runs', icon: PlayCircle, color: 'text-neon-yellow', subtitleSuffix: 'SESSIONS' },
@@ -48,8 +49,10 @@ export const Header: React.FC = () => {
         fetchApps, fetchMemories, fetchRuns, fetchMcpServers,
         newsViewMode, setNewsViewMode, setNewsSearchQuery, setSearchResults,
         notesFiles, fetchNotesFiles, isNotesLoading,
+        currentSpaceId,
         gitSummary, fetchGitSummary,
-        unreadCount, isInboxOpen, setIsInboxOpen
+        unreadCount, isInboxOpen, setIsInboxOpen,
+        authStatus, authUserId, authUserFirstName, authUserEmail, isAuthModalOpen, setIsAuthModalOpen
     } = useAppStore();
     const { theme } = useTheme();
 
@@ -385,15 +388,38 @@ export const Header: React.FC = () => {
 
                     <div className="h-6 w-px bg-border/50 mx-2" />
 
-                    {/* Spaces (Phase 4) — available from all panels */}
+                    {/* Spaces (Phase 4) — show current space when non-global */}
                     <button
                         onClick={() => setIsSpacesModalOpen(true)}
                         className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-muted/40 border border-border/50 hover:bg-muted/60 hover:border-primary/30 transition-colors no-drag"
                         title="Manage Spaces"
                     >
                         <FolderOpen className="w-3.5 h-3.5 text-muted-foreground" />
-                        <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Spaces</span>
+                        <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest max-w-[120px] truncate">
+                            Space:{' '}
+                            {currentSpaceId
+                                ? (spaces.find(s => s.space_id === currentSpaceId)?.name || 'Space')
+                                : 'Global'}
+                        </span>
                     </button>
+
+                    <div className="h-6 w-px bg-border/50 mx-2" />
+
+                    {/* Auth Status & Modal Toggle */}
+                    <button
+                        onClick={() => setIsAuthModalOpen(true)}
+                        className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-muted/40 border border-border/50 hover:bg-muted/60 hover:border-primary/30 transition-colors no-drag"
+                        title={authStatus === 'logged_in' ? 'Account Settings / Logout' : 'Login / Register'}
+                    >
+                        <User className={cn("w-3.5 h-3.5", authStatus === 'logged_in' ? "text-neon-cyan" : "text-neon-yellow")} />
+                        <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest max-w-[80px] truncate">
+                            {authStatus === 'logged_in' 
+                                ? (authUserFirstName ? authUserFirstName.trim().substring(0, 4) : (authUserEmail ? authUserEmail.split('@')[0].substring(0, 8) : 'User')) 
+                                : 'Guest'}
+                        </span>
+                    </button>
+
+                    <div className="h-6 w-px bg-border/50 mx-2" />
 
                     {/* Privacy Mode Toggle */}
                     <button
@@ -511,6 +537,9 @@ export const Header: React.FC = () => {
 
             {/* Spaces Modal — manage spaces from any panel */}
             <SpacesModal isOpen={isSpacesModalOpen} onClose={() => setIsSpacesModalOpen(false)} />
+
+            {/* Auth Modal */}
+            <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} />
         </>
     );
 };
