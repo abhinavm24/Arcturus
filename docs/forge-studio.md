@@ -124,10 +124,10 @@ The P04 charter (`CAPSTONE/project_charters/P04_forge_ai_document_slides_sheets_
 ```mermaid
 graph TB
     subgraph Frontend["Frontend (Electron/React)"]
-        FD[ForgeDashboard]
-        CD[CreateDialog]
-        AD[ArtifactDetail]
-        EP[ExportPanel]
+        FD([ForgeDashboard])
+        CD([CreateDialog])
+        AD([ArtifactDetail])
+        EP([ExportPanel])
         SS[StudioSlice<br/>Zustand Store]
         AC[API Client<br/>api.ts]
     end
@@ -152,11 +152,11 @@ graph TB
     end
 
     subgraph Infrastructure["Infrastructure"]
-        ST[StudioStorage<br/>File-based JSON]
-        RM[RevisionManager]
+        ST{{StudioStorage<br/>File-based JSON}}
+        RM{{RevisionManager}}
         PR[Prompts<br/>prompts.py]
         MM[ModelManager<br/>LLM abstraction]
-        IG[Image Generator<br/>Gemini API]
+        IG{{Image Generator<br/>Gemini API}}
     end
 
     FD --> SS
@@ -181,6 +181,20 @@ graph TB
     Orchestrator --> ST
     Orchestrator --> RM
     SL --> IG
+
+    classDef frontend fill:#3b82f6,stroke:#1e40af,color:#fff
+    classDef store fill:#60a5fa,stroke:#2563eb,color:#fff
+    classDef router fill:#f59e0b,stroke:#d97706,color:#fff
+    classDef orchestrator fill:#22c55e,stroke:#16a34a,color:#fff
+    classDef pipeline fill:#a78bfa,stroke:#7c3aed,color:#fff
+    classDef infra fill:#94a3b8,stroke:#475569,color:#fff
+
+    class FD,CD,AD,EP frontend
+    class SS,AC store
+    class SR router
+    class OG,OA,OE,OD,OR orchestrator
+    class SL,DC,SH,ED pipeline
+    class ST,RM,PR,MM,IG infra
 ```
 
 ### Directory Tree
@@ -242,6 +256,7 @@ core/studio/                         # Main package
 All Pydantic models live in `core/schemas/studio_schema.py`:
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'primaryColor': '#818cf8', 'primaryBorderColor': '#4f46e5', 'primaryTextColor': '#fff', 'lineColor': '#6366f1', 'secondaryColor': '#c4b5fd', 'tertiaryColor': '#e0e7ff', 'fontSize': '14px'}}}%%
 erDiagram
     Artifact {
         str id PK
@@ -406,6 +421,7 @@ Understanding which behaviors are reproducible vs stochastic is critical for deb
 ### Pipeline Sequence
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'actorBkg': '#3b82f6', 'actorTextColor': '#fff', 'actorBorder': '#1e40af', 'activationBorderColor': '#4f46e5', 'activationBkgColor': '#e0e7ff', 'signalColor': '#334155', 'signalTextColor': '#1e293b', 'noteBkgColor': '#fef3c7', 'noteTextColor': '#92400e', 'noteBorderColor': '#f59e0b', 'sequenceNumberColor': '#fff'}}}%%
 sequenceDiagram
     participant U as User/Frontend
     participant R as Router
@@ -417,57 +433,83 @@ sequenceDiagram
     participant E as Exporter
     participant V as Validator
 
-    Note over U,V: Phase 1: Outline Generation
-    U->>R: POST /studio/slides {prompt}
-    R->>O: generate_outline()
-    O->>P: get_outline_prompt()
-    P-->>O: system prompt
-    O->>LLM: generate_text()
-    LLM-->>O: raw JSON
-    O->>O: parse_llm_json()
-    O->>N: normalize_slide_outline()
-    N-->>O: normalized outline
-    O->>S: save_artifact()
-    O-->>R: {artifact_id, outline, status: "pending"}
-    R-->>U: 200 OK
+    rect rgba(59, 130, 246, 0.08)
+        Note over U,V: Phase 1: Outline Generation
+        U->>R: POST /studio/slides {prompt}
+        activate R
+        R->>O: generate_outline()
+        activate O
+        O->>P: get_outline_prompt()
+        P-->>O: system prompt
+        O->>LLM: generate_text()
+        LLM-->>O: raw JSON
+        O->>O: parse_llm_json()
+        O->>N: normalize_slide_outline()
+        N-->>O: normalized outline
+        O->>S: save_artifact()
+        O-->>R: {artifact_id, outline, status: "pending"}
+        deactivate O
+        R-->>U: 200 OK
+        deactivate R
+    end
 
-    Note over U,V: Phase 2: Outline Approval + Draft
-    U->>R: POST /{id}/outline/approve
-    R->>O: approve_and_generate_draft()
-    O->>O: plan_slide_sequence(seed, count)
-    O->>P: get_draft_prompt_with_sequence()
-    P-->>O: enhanced prompt
-    O->>LLM: generate_text()
-    LLM-->>O: raw content tree JSON
-    O->>O: validate_content_tree()
-    O->>N: enforce_slide_count() + repair_speaker_notes()
-    N-->>O: normalized content tree
-    O->>S: create_revision() + save_artifact()
-    O-->>R: full artifact dict
-    R-->>U: 200 OK
+    rect rgba(34, 197, 94, 0.08)
+        Note over U,V: Phase 2: Outline Approval + Draft
+        U->>R: POST /{id}/outline/approve
+        activate R
+        R->>O: approve_and_generate_draft()
+        activate O
+        O->>O: plan_slide_sequence(seed, count)
+        O->>P: get_draft_prompt_with_sequence()
+        P-->>O: enhanced prompt
+        O->>LLM: generate_text()
+        LLM-->>O: raw content tree JSON
+        O->>O: validate_content_tree()
+        O->>N: enforce_slide_count() + repair_speaker_notes()
+        N-->>O: normalized content tree
+        O->>S: create_revision() + save_artifact()
+        O-->>R: full artifact dict
+        deactivate O
+        R-->>U: 200 OK
+        deactivate R
+    end
 
-    Note over U,V: Phase 3: Export
-    U->>R: POST /{id}/export {format, theme_id}
-    R->>O: export_artifact()
-    O->>E: export_to_pptx(content_tree, theme)
-    E-->>O: output file path
-    O->>V: validate_pptx()
-    V-->>O: validation results
-    O->>S: save_export_job()
-    O-->>R: export job dict
-    R-->>U: 200 OK
+    rect rgba(245, 158, 11, 0.08)
+        Note over U,V: Phase 3: Export
+        U->>R: POST /{id}/export {format, theme_id}
+        activate R
+        R->>O: export_artifact()
+        activate O
+        O->>E: export_to_pptx(content_tree, theme)
+        activate E
+        E-->>O: output file path
+        deactivate E
+        O->>V: validate_pptx()
+        V-->>O: validation results
+        O->>S: save_export_job()
+        O-->>R: export job dict
+        deactivate O
+        R-->>U: 200 OK
+        deactivate R
+    end
 
-    Note over U,V: Phase 4: Editing
-    U->>R: POST /{id}/edit {instruction}
-    R->>O: edit_artifact()
-    O->>O: concurrency check
-    O->>LLM: plan_patch()
-    LLM-->>O: patch JSON
-    O->>O: apply_patch_to_content_tree()
-    O->>O: compute_revision_diff()
-    O->>S: create_revision()
-    O-->>R: artifact + edit_result
-    R-->>U: 200 OK
+    rect rgba(139, 92, 246, 0.08)
+        Note over U,V: Phase 4: Editing
+        U->>R: POST /{id}/edit {instruction}
+        activate R
+        R->>O: edit_artifact()
+        activate O
+        O->>O: concurrency check
+        O->>LLM: plan_patch()
+        LLM-->>O: patch JSON
+        O->>O: apply_patch_to_content_tree()
+        O->>O: compute_revision_diff()
+        O->>S: create_revision()
+        O-->>R: artifact + edit_result
+        deactivate O
+        R-->>U: 200 OK
+        deactivate R
+    end
 ```
 
 ### Step-by-Step Walkthrough
@@ -1020,6 +1062,26 @@ flowchart TD
     N -->|No| O[Return no_changes<br/>warning]
     N -->|Yes| P[Create revision<br/>Save artifact]
     P --> Q[Return artifact +<br/>edit_result]
+
+    classDef startNode fill:#3b82f6,stroke:#1e40af,color:#fff
+    classDef decision fill:#f59e0b,stroke:#d97706,color:#fff
+    classDef errorNode fill:#ef4444,stroke:#b91c1c,color:#fff
+    classDef successNode fill:#22c55e,stroke:#16a34a,color:#fff
+    classDef processNode fill:#e2e8f0,stroke:#64748b,color:#1e293b
+
+    class A startNode
+    class B,F,I,L,N decision
+    class C,J errorNode
+    class Q,P,K successNode
+    class D,E,G,H processNode
+    class M,O processNode
+
+    linkStyle 1 stroke:#ef4444
+    linkStyle 5 stroke:#ef4444
+    linkStyle 8 stroke:#ef4444
+    linkStyle 10 stroke:#22c55e
+    linkStyle 11 stroke:#22c55e
+    linkStyle 15 stroke:#22c55e
 ```
 
 ### Patch Operations
