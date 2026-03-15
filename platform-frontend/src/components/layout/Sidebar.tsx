@@ -2,7 +2,7 @@ import React from 'react';
 import {
     Plus, Clock, Search, Trash2, Database, Box, PlayCircle, Brain,
     LayoutGrid, Newspaper, GraduationCap, Settings, Code2, Loader2, Notebook,
-    CalendarClock, Terminal, Zap, Wand2, Shield, FolderOpen, Network, Mic
+    CalendarClock, Terminal, Zap, Wand2, Shield, FolderOpen, Mic, Network
 } from 'lucide-react';
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
@@ -24,11 +24,12 @@ import { SettingsPanel } from '@/components/sidebar/SettingsPanel';
 import { NewsPanel } from '@/components/sidebar/NewsPanel';
 import { GraphPanel } from '@/components/sidebar/GraphPanel';
 import { StudioSidebar } from '@/features/studio/StudioSidebar';
+import { SwarmSidebar } from '@/features/swarm/SwarmSidebar';
 
 const NavIcon = ({ icon: Icon, label, tab, active, onClick }: {
     icon: any,
     label: string,
-    tab?: 'runs' | 'spaces' | 'rag' | 'notes' | 'mcp' | 'remme' | 'explorer' | 'graph' | 'apps' | 'news' | 'learn' | 'settings' | 'ide' | 'scheduler' | 'console' | 'skills' | 'canvas' | 'studio' | 'admin' | 'echo',
+    tab?: 'runs' | 'rag' | 'notes' | 'mcp' | 'remme' | 'explorer' | 'graph' | 'apps' | 'news' | 'learn' | 'settings' | 'ide' | 'scheduler' | 'console' | 'skills' | 'canvas' | 'studio' | 'admin' | 'echo' | 'swarm',
     active: boolean,
     onClick: () => void
 }) => {
@@ -108,12 +109,7 @@ export const Sidebar: React.FC<{ hideSubPanel?: boolean }> = ({ hideSubPanel }) 
         fetchRuns();
     }, [fetchRuns]);
 
-    // Spaces moved to header modal; redirect if persisted tab was 'spaces'
-    React.useEffect(() => {
-        if ((sidebarTab as string) === 'spaces') {
-            setSidebarTab('runs');
-        }
-    }, [sidebarTab, setSidebarTab]);
+    // Spaces moved to header modal; 'spaces' tab no longer exists in the type union
 
     const isNewRunOpen = useAppStore(state => state.isNewRunOpen);
     const setIsNewRunOpen = useAppStore(state => state.setIsNewRunOpen);
@@ -176,6 +172,7 @@ export const Sidebar: React.FC<{ hideSubPanel?: boolean }> = ({ hideSubPanel }) 
                     <NavIcon icon={Network} label="Graph" tab="graph" active={sidebarTab === 'graph'} onClick={() => setSidebarTab('graph')} />
                     <NavIcon icon={Code2} label="Explorer" tab="explorer" active={sidebarTab === 'explorer'} onClick={() => setSidebarTab('explorer')} />
                     <NavIcon icon={LayoutGrid} label="Canvas" tab="canvas" active={sidebarTab === 'canvas'} onClick={() => setSidebarTab('canvas')} />
+                    <NavIcon icon={Network} label="Swarm" tab="swarm" active={sidebarTab === 'swarm'} onClick={() => setSidebarTab('swarm')} />
 
                     <div className="w-8 h-px bg-muted/50 my-2 mx-auto" />
 
@@ -413,7 +410,7 @@ export const Sidebar: React.FC<{ hideSubPanel?: boolean }> = ({ hideSubPanel }) 
                     {sidebarTab === 'explorer' && <ExplorerPanel />}
                     {sidebarTab === 'echo' && <EchoPanel />}
                     {sidebarTab === 'studio' && <StudioSidebar />}
-
+                    {sidebarTab === 'swarm' && <SwarmSidebar />}
                     {/* Persist AppsSidebar to prevent reloading app components */}
                     <div style={{ display: sidebarTab === 'apps' ? 'block' : 'none', height: '100%' }}>
                         <AppsSidebar />

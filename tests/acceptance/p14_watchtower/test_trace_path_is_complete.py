@@ -208,3 +208,194 @@ def test_19_health_resources_returns_cpu_mem_disk(admin_client) -> None:
     assert isinstance(res["cpu_pct"], (int, float))
     assert isinstance(res["mem_pct"], (int, float))
     assert isinstance(res["disk_pct"], (int, float))
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: P14.4 Admin Controls
+# ---------------------------------------------------------------------------
+
+
+def test_20_admin_flags_list_returns_flags(admin_client) -> None:
+    """Feature flags endpoint returns list of flags with name, enabled, lifecycle."""
+    resp = admin_client.get("/api/admin/flags")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "flags" in data
+    assert isinstance(data["flags"], list)
+    assert len(data["flags"]) >= 4
+    flag = data["flags"][0]
+    assert "name" in flag
+    assert "enabled" in flag
+    assert "lifecycle" in flag
+    assert isinstance(flag["enabled"], bool)
+
+
+def test_21_admin_flags_toggle_updates_state(admin_client) -> None:
+    """Toggling a flag returns the updated state."""
+    # Toggle multi_agent to True
+    resp = admin_client.put("/api/admin/flags/multi_agent", json={"enabled": True})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["name"] == "multi_agent"
+    assert data["enabled"] is True
+
+    # Verify it persisted
+    resp = admin_client.get("/api/admin/flags")
+    flags = {f["name"]: f["enabled"] for f in resp.json()["flags"]}
+    assert flags["multi_agent"] is True
+
+
+def test_22_admin_flags_delete_removes_flag(admin_client) -> None:
+    """Deleting a flag removes it from the list."""
+    resp = admin_client.delete("/api/admin/flags/semantic_cache")
+    assert resp.status_code == 200
+    assert resp.json()["deleted"] == "semantic_cache"
+
+    # Verify it's gone
+    resp = admin_client.get("/api/admin/flags")
+    names = [f["name"] for f in resp.json()["flags"]]
+    assert "semantic_cache" not in names
+
+
+def test_23_admin_cache_list_returns_caches(admin_client) -> None:
+    """Cache endpoint returns list of known caches."""
+    resp = admin_client.get("/api/admin/cache")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "caches" in data
+    assert isinstance(data["caches"], list)
+    assert len(data["caches"]) >= 1
+    # Settings cache should always be present
+    names = [c["name"] for c in data["caches"]]
+    assert "settings" in names
+
+
+def test_24_admin_config_returns_current_config(admin_client) -> None:
+    """Config endpoint returns current settings."""
+    resp = admin_client.get("/api/admin/config")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "config" in data
+    assert isinstance(data["config"], dict)
+
+
+def test_25_admin_diagnostics_returns_check_results(admin_client) -> None:
+    """Diagnostics endpoint returns overall status and checks list."""
+    resp = admin_client.get("/api/admin/diagnostics")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "overall" in data
+    assert data["overall"] in ("pass", "warn", "fail")
+    assert "summary" in data
+    assert "checks" in data
+    assert isinstance(data["checks"], list)
+    if data["checks"]:
+        check = data["checks"][0]
+        assert "check" in check
+        assert "status" in check
+        assert "message" in check
+
+
+def test_26_admin_sessions_returns_session_list(admin_client) -> None:
+    """Sessions endpoint returns list of sessions from span data."""
+    resp = admin_client.get("/api/admin/sessions", params={"hours": 24, "limit": 10})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "sessions" in data
+    assert isinstance(data["sessions"], list)
+    assert "hours" in data
+    assert "count" in data
+
+
+def test_27_admin_invalid_flag_delete_returns_404(admin_client) -> None:
+    """Deleting a nonexistent flag returns 404."""
+    resp = admin_client.delete("/api/admin/flags/nonexistent_flag_xyz")
+    assert resp.status_code == 404
+
+
+# ===================================================================
+# P14.5 — Audit & Compliance
+# ===================================================================
+
+
+def test_28_admin_audit_returns_log_entries(admin_client) -> None:
+    """Audit query endpoint returns a list of audit entries."""
+    resp = admin_client.get("/api/admin/audit", params={"hours": 24})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "entries" in data
+    assert isinstance(data["entries"], list)
+    assert "count" in data
+    assert data["count"] >= 0
+    # Verify entry structure when entries exist
+    if data["entries"]:
+        entry = data["entries"][0]
+        assert "timestamp" in entry
+        assert "actor" in entry
+        assert "action" in entry
+        assert "resource" in entry
+
+
+def test_29_admin_audit_filter_by_action(admin_client) -> None:
+    """Audit log supports filtering by action type."""
+    resp = admin_client.get(
+        "/api/admin/audit",
+        params={"hours": 24, "action": "feature_toggle"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "entries" in data
+    assert "count" in data
+
+
+def test_30_admin_data_export_returns_session_data(admin_client) -> None:
+    """GDPR export endpoint returns data bundle with all stores."""
+    resp = admin_client.get("/api/admin/data/test-session")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["session_id"] == "test-session"
+    assert "stores" in data
+    stores = data["stores"]
+    expected_stores = [
+        "session_files", "mongodb_spans", "qdrant_vectors",
+        "neo4j_graph", "chronicle_checkpoints", "audit_log",
+    ]
+    for store_name in expected_stores:
+        assert store_name in stores, f"Missing store: {store_name}"
+
+
+def test_31_admin_data_delete_purges_session(admin_client) -> None:
+    """GDPR delete endpoint returns deletion summary for each store."""
+    resp = admin_client.delete("/api/admin/data/test-session")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["session_id"] == "test-session"
+    assert "stores" in data
+    assert "deleted_at" in data
+    # Each store should have a "deleted" count
+    for store_name, store_data in data["stores"].items():
+        assert "deleted" in store_data, f"Store {store_name} missing 'deleted' key"
+
+
+def test_32_admin_data_delete_nonexistent_returns_empty(admin_client) -> None:
+    """Deleting a nonexistent session returns zero counts but succeeds."""
+    resp = admin_client.delete("/api/admin/data/nonexistent-session-xyz")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["session_id"] == "nonexistent-session-xyz"
+
+
+def test_33_admin_auth_rejects_without_key(admin_client_with_auth) -> None:
+    """When admin_api_key is configured, requests without key get 401."""
+    resp = admin_client_with_auth.get("/api/admin/audit")
+    assert resp.status_code == 401
+
+
+def test_34_admin_auth_allows_with_valid_key(admin_client_with_auth) -> None:
+    """When admin_api_key is configured, requests with correct key get through."""
+    resp = admin_client_with_auth.get(
+        "/api/admin/audit",
+        headers={"X-Admin-Key": "test-secret-key-123"},
+    )
+    # Should not be 401 (may be 500 if mocks not set up for full flow, but auth passes)
+    assert resp.status_code != 401

@@ -47,6 +47,9 @@ import { MissionControl } from '@/features/console/components/MissionControl';
 import { SkillsDashboard } from '@/features/skills/components/SkillsDashboard';
 import { ForgeDashboard } from '@/features/forge/components/ForgeDashboard';
 import { AdminDashboard } from '@/features/admin/AdminDashboard';
+import { SwarmGraphView } from '@/features/swarm/SwarmGraphView';
+import { AgentPeekPanel } from '@/features/swarm/AgentPeekPanel';
+import { useSwarmStore } from '@/features/swarm/useSwarmStore';
 
 export const AppLayout: React.FC = () => {
     // Mount useVoice at the root so wake-word events trigger the Echo tab
@@ -72,6 +75,8 @@ export const AppLayout: React.FC = () => {
         return () => stopEventStream();
     }, [startEventStream, stopEventStream]);
 
+    const selectedAgentId = useSwarmStore(s => s.selectedAgentId);
+
     // Moved isInspectorOpen definition down to include new tabs context
 
     const isInspectorOpen = React.useMemo(() => {
@@ -82,8 +87,9 @@ export const AppLayout: React.FC = () => {
         if (sidebarTab === 'mcp' && selectedMcpServer) return true;
         if (sidebarTab === 'news' && showNewsChatPanel) return true;
         if (sidebarTab === 'echo' && currentRun) return true;
+        if (sidebarTab === 'swarm' && !!selectedAgentId) return true;
         return false;
-    }, [sidebarTab, selectedNodeId, selectedAppCardId, selectedExplorerNodeId, showRagInsights, selectedMcpServer, selectedLibraryComponent, showNewsChatPanel, currentRun]);
+    }, [sidebarTab, selectedNodeId, selectedAppCardId, selectedExplorerNodeId, showRagInsights, selectedMcpServer, selectedLibraryComponent, showNewsChatPanel, currentRun, selectedAgentId]);
 
     // Scheduler and Console take up full width, no sidebar subpanel needed
     // Echo should NOT be hidden when inspector is open, because the conversation is the primary surface.
@@ -259,6 +265,8 @@ export const AppLayout: React.FC = () => {
                                     </>
                                 ) : sidebarTab === 'canvas' ? (
                                     <CanvasHost surfaceId="main-canvas" />
+                                ) : sidebarTab === 'swarm' ? (
+                                    <SwarmGraphView />
                                 ) : (
                                     <>
                                         <GraphCanvas />
@@ -292,8 +300,9 @@ export const AppLayout: React.FC = () => {
                             {sidebarTab === 'apps' ? <AppInspector /> :
                                 sidebarTab === 'mcp' ? <McpInspector /> :
                                     sidebarTab === 'news' ? <NewsInspector /> :
-                                        (sidebarTab === 'rag' || sidebarTab === 'notes') ? <DocumentAssistant context={sidebarTab as 'rag' | 'notes'} /> :
-                                            <WorkspacePanel />}
+                                        sidebarTab === 'swarm' ? <AgentPeekPanel /> :
+                                            (sidebarTab === 'rag' || sidebarTab === 'notes') ? <DocumentAssistant context={sidebarTab as 'rag' | 'notes'} /> :
+                                                <WorkspacePanel />}
                         </div>
                     </>
                 )}
