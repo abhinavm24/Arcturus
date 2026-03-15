@@ -31,13 +31,14 @@ class LLMResponseCache:
         self._misses = 0
 
     @staticmethod
-    def _make_key(prompt: str, model_key: str) -> str:
-        prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
+    def _make_key(prompt: str, model_key: str, cache_key: Optional[str] = None) -> str:
+        base = (cache_key if cache_key is not None else prompt).encode("utf-8")
+        prompt_hash = hashlib.sha256(base).hexdigest()[:16]
         return f"{model_key}:{prompt_hash}"
 
-    def get(self, prompt: str, model_key: str) -> Optional[str]:
-        """Return cached response or ``None`` on miss."""
-        key = self._make_key(prompt, model_key)
+    def get(self, prompt: str, model_key: str, cache_key: Optional[str] = None) -> Optional[str]:
+        """Return cached response or ``None`` on miss. Use cache_key for invariant lookup when prompt varies by run_id etc."""
+        key = self._make_key(prompt, model_key, cache_key)
         with self._lock:
             if key in self._store:
                 self._store.move_to_end(key)
@@ -47,9 +48,9 @@ class LLMResponseCache:
             self._misses += 1
             return None
 
-    def put(self, prompt: str, model_key: str, response: str) -> None:
+    def put(self, prompt: str, model_key: str, response: str, cache_key: Optional[str] = None) -> None:
         """Store a response, evicting the oldest entry if at capacity."""
-        key = self._make_key(prompt, model_key)
+        key = self._make_key(prompt, model_key, cache_key)
         with self._lock:
             if key in self._store:
                 self._store.move_to_end(key)

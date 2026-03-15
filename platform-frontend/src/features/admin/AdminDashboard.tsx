@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Activity, DollarSign, AlertTriangle, Heart, Flag, Settings, Stethoscope, FileText, Database } from 'lucide-react';
+import { Activity, DollarSign, AlertTriangle, Heart, Flag, Settings, Stethoscope, FileText, Database, Gauge } from 'lucide-react';
 import { TracesPanel } from './components/TracesPanel';
 import { CostPanel } from './components/CostPanel';
 import { ErrorsPanel } from './components/ErrorsPanel';
@@ -9,10 +9,11 @@ import { ConfigPanel } from './components/ConfigPanel';
 import { DiagnosticsPanel } from './components/DiagnosticsPanel';
 import { AuditLogPanel } from './components/AuditLogPanel';
 import { CachePanel } from './components/CachePanel';
+import { ThrottlePanel } from './components/ThrottlePanel';
 import { cn } from '@/lib/utils';
 import { useFeatureFlags } from '@/hooks/useFeatureFlags';
 
-type TabId = 'traces' | 'cost' | 'errors' | 'health' | 'flags' | 'config' | 'diagnostics' | 'audit' | 'cache';
+type TabId = 'traces' | 'cost' | 'errors' | 'health' | 'flags' | 'config' | 'diagnostics' | 'throttle' | 'audit' | 'cache';
 
 export const AdminDashboard: React.FC = () => {
     const [activeTab, setActiveTab] = useState<TabId>('traces');
@@ -26,6 +27,7 @@ export const AdminDashboard: React.FC = () => {
         { id: 'flags', label: 'Flags', icon: Flag },
         { id: 'config', label: 'Config', icon: Settings },
         { id: 'diagnostics', label: 'Doctor', icon: Stethoscope },
+        { id: 'throttle', label: 'Throttle', icon: Gauge },
         { id: 'audit', label: 'Audit', icon: FileText },
         { id: 'cache', label: 'Cache', icon: Database },
     ];
@@ -43,7 +45,7 @@ export const AdminDashboard: React.FC = () => {
             <div className="border-b border-border px-6 py-4">
                 <h1 className="text-xl font-bold uppercase tracking-tighter">Watchtower Admin</h1>
                 <p className="text-sm text-muted-foreground mt-1">
-                    Tracing, cost, errors, health, feature flags, config, diagnostics, audit, and cache
+                    Tracing, cost, errors, health, feature flags, config, diagnostics, throttle, audit, and cache
                 </p>
             </div>
             <div className="flex border-b border-border overflow-x-auto">
@@ -71,6 +73,7 @@ export const AdminDashboard: React.FC = () => {
                 {activeTab === 'flags' && <FlagsPanel />}
                 {activeTab === 'config' && <ConfigPanel />}
                 {activeTab === 'diagnostics' && <DiagnosticsPanel />}
+                {activeTab === 'throttle' && <ThrottlePanel />}
                 {activeTab === 'audit' && <AuditLogPanel />}
                 {activeTab === 'cache' && <CachePanel />}
             </div>

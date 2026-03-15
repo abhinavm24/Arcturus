@@ -43,7 +43,7 @@ def check_qdrant() -> HealthResult:
         import httpx
 
         url = get_qdrant_url().rstrip("/")
-        health_url = f"{url}/health"
+        health_url = f"{url}/healthz"  # Qdrant uses /healthz, /livez, /readyz (not /health)
         start = time.perf_counter()
         with httpx.Client(timeout=3.0) as client:
             resp = client.get(health_url)

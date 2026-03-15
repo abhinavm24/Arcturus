@@ -8,10 +8,24 @@ Query patterns:
 - For real-time updates, MongoDB Change Streams require a replica set (not standalone).
 """
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Optional
 
 # Type for MongoDB collection (avoids pymongo import in type hints)
 Collection = Any
+
+
+def get_spans_collection() -> Optional[Collection]:
+    """Get MongoDB spans collection from watchtower config. Returns None if unavailable."""
+    try:
+        from config.settings_loader import settings
+        from pymongo import MongoClient
+
+        watchtower = settings.get("watchtower", {})
+        uri = watchtower.get("mongodb_uri", "mongodb://localhost:27017")
+        client = MongoClient(uri)
+        return client["watchtower"]["spans"]
+    except Exception:
+        return None
 
 
 def _since_datetime(hours: int) -> datetime:

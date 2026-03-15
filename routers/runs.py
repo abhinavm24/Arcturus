@@ -166,7 +166,20 @@ async def process_run(
     """
     if user_id:
         set_current_user_id(user_id)
-        
+
+    # Throttle: safety net — block if budget exceeded (e.g. race with concurrent requests)
+    try:
+        from ops.admin.spans_repository import get_spans_collection
+        from ops.admin.throttle import ThrottlePolicy
+
+        coll = get_spans_collection()
+        policy = ThrottlePolicy(spans_collection=coll)
+        allowed, reason = policy.check_budget()
+        if not allowed:
+            return  # Run aborted; no session created (client may get 404 when polling)
+    except Exception:
+        pass
+
     with run_span(run_id, query or "") as span:
         skill = None
         context = None
@@ -782,6 +795,21 @@ async def create_run(request: RunRequest, background_tasks: BackgroundTasks):
             "created_at": datetime.now().isoformat(),
             "query": request.query,
         }
+
+    # Throttle: block new runs if hourly/daily cost budget exceeded
+    try:
+        from ops.admin.spans_repository import get_spans_collection
+        from ops.admin.throttle import ThrottlePolicy
+
+        coll = get_spans_collection()
+        policy = ThrottlePolicy(spans_collection=coll)
+        allowed, reason = policy.check_budget()
+        if not allowed:
+            raise HTTPException(status_code=429, detail=reason)
+    except HTTPException:
+        raise
+    except Exception:
+        pass  # If throttle check fails (e.g. MongoDB down), allow run to proceed
 
     # Start background execution (Phase 3C: pass space_id for session scoping)
     background_tasks.add_task(

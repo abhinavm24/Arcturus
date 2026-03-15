@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from pymongo import MongoClient
 
 from config.settings_loader import settings, load_settings, reload_settings, save_settings
-from ops.admin.spans_repository import SpansRepository
+from ops.admin.spans_repository import SpansRepository, get_spans_collection
 
 # ---------------------------------------------------------------------------
 # Admin API-key auth guard (P14.5)
@@ -40,10 +40,10 @@ router = APIRouter(prefix="/admin", tags=["Admin"], dependencies=[Depends(_verif
 
 def _get_spans_collection():
     """Get MongoDB spans collection from watchtower config."""
-    watchtower = settings.get("watchtower", {})
-    uri = watchtower.get("mongodb_uri", "mongodb://localhost:27017")
-    client = MongoClient(uri)
-    return client["watchtower"]["spans"]
+    coll = get_spans_collection()
+    if coll is None:
+        raise RuntimeError("Spans collection unavailable")
+    return coll
 
 
 def _repo() -> SpansRepository:

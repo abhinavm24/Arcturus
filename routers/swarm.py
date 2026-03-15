@@ -91,6 +91,21 @@ async def start_swarm_run(body: StartSwarmRequest, background_tasks: BackgroundT
     if not flag_store.get("multi_agent"):
         raise HTTPException(status_code=403, detail="Multi-agent swarm is disabled")
 
+    # Throttle: block if hourly/daily cost budget exceeded
+    try:
+        from ops.admin.spans_repository import get_spans_collection
+        from ops.admin.throttle import ThrottlePolicy
+
+        coll = get_spans_collection()
+        policy = ThrottlePolicy(spans_collection=coll)
+        allowed, reason = policy.check_budget()
+        if not allowed:
+            raise HTTPException(status_code=429, detail=reason)
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
     run_id = str(uuid.uuid4())
     runner = SwarmRunner(
         swarm_token_budget=body.token_budget,

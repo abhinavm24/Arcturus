@@ -130,14 +130,15 @@ class ModelManager:
                     f"Please check config/models.yaml."
                 )
 
-    async def generate_text(self, prompt: str) -> str:
+    async def generate_text(self, prompt: str, cache_key: str | None = None) -> str:
         """
         Generate text via Gemini or Ollama API.
         WATCHTOWER: Span for each LLM API call (Gemini, Ollama).
         - Attributes: model, provider, prompt_length, output_length, cost_usd, input_tokens, output_tokens
+        - cache_key: Optional invariant key for semantic cache when prompt varies by run_id etc.
         """
         if flag_store.get("semantic_cache"):
-            cached = llm_cache.get(prompt, self.text_model_key)
+            cached = llm_cache.get(prompt, self.text_model_key, cache_key)
             if cached is not None:
                 return cached
 
@@ -164,7 +165,7 @@ class ModelManager:
                     span.set_attribute("cost_usd", 0)
 
                 if flag_store.get("semantic_cache"):
-                    llm_cache.put(prompt, self.text_model_key, result)
+                    llm_cache.put(prompt, self.text_model_key, result, cache_key)
 
                 return result
             except Exception as e:
