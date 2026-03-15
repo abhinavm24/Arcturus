@@ -8,6 +8,7 @@ from typing import List
 from config.settings_loader import settings, get_ollama_url
 from memory.qdrant_config import get_qdrant_url
 from ops.health.models import HealthResult, ResourceSnapshot
+from shared.state import get_voice_status
 
 
 def check_mongodb() -> HealthResult:
@@ -161,6 +162,25 @@ def check_neo4j() -> HealthResult:
             driver.close()
 
 
+def check_voice() -> HealthResult:
+    """Check voice pipeline status via shared startup state."""
+    try:
+        available, error = get_voice_status()
+        if available:
+            return HealthResult(service="voice_pipeline", status="ok")
+        if error:
+            return HealthResult(
+                service="voice_pipeline", status="down", details=error
+            )
+        return HealthResult(
+            service="voice_pipeline",
+            status="down",
+            details="Not initialized",
+        )
+    except Exception as e:
+        return HealthResult(service="voice_pipeline", status="down", details=str(e))
+
+
 def check_agent_core() -> HealthResult:
     """Check agent core liveness via active_loops state."""
     try:
@@ -217,5 +237,6 @@ def run_all_health_checks() -> List[HealthResult]:
         check_ollama(),
         check_mcp(),
         check_neo4j(),
+        check_voice(),
         check_agent_core(),
     ]

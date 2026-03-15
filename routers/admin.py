@@ -489,14 +489,13 @@ async def update_throttle(body: ThrottleUpdateRequest):
 
 
 # ===================================================================
+# ===================================================================
 # P14.5 — Audit & Compliance
 # ===================================================================
-
 
 # ---------------------------------------------------------------------------
 # Audit Log Query
 # ---------------------------------------------------------------------------
-
 
 @router.get("/audit")
 async def query_audit_log(
@@ -510,7 +509,6 @@ async def query_audit_log(
 
     entries = audit_logger.query(hours=hours, action=action, resource=resource, limit=limit)
     return {"entries": entries, "count": len(entries), "hours": hours}
-
 
 # ---------------------------------------------------------------------------
 # GDPR Data Export & Deletion
@@ -544,7 +542,9 @@ async def export_session_data(session_id: str):
     result = manager.export(session_id)
 
     from ops.audit import audit_logger
-    audit_logger.log_action("admin", "data_export", f"session:{session_id}", None, "exported")
+    audit_logger.log_action(
+        "admin", "data_export", f"session:{session_id}", None, "exported"
+    )
 
     return result
 
@@ -556,7 +556,44 @@ async def delete_session_data(session_id: str):
     result = manager.delete(session_id)
 
     from ops.audit import audit_logger
-    audit_logger.log_action("admin", "data_delete", f"session:{session_id}", None, result["stores"])
+    audit_logger.log_action(
+        "admin", "data_delete", f"session:{session_id}", None, result["stores"]
+    )
 
     return result
 
+
+@router.delete("/data")
+async def delete_all_watchtower_data():
+    """Bulk-delete all watchtower data: spans, health_checks, and audit_log."""
+    from datetime import datetime
+
+    watchtower = settings.get("watchtower", {})
+    uri = watchtower.get("mongodb_uri", "mongodb://localhost:27017")
+    client = MongoClient(uri)
+    db = client["watchtower"]
+
+    summary = {
+        "deleted_at": datetime.utcnow().isoformat(),
+        "collections": {},
+    }
+
+    for collection_name in ("spans", "health_checks", "audit_log"):
+        try:
+            result = db[collection_name].delete_many({})
+            summary["collections"][collection_name] = {
+                "deleted": result.deleted_count
+            }
+        except Exception as e:
+            summary["collections"][collection_name] = {
+                "deleted": 0,
+                "error": str(e),
+            }
+
+    from ops.audit import audit_logger
+
+    audit_logger.log_action(
+        "admin", "data_delete", "all_watchtower_data", None, summary["collections"]
+    )
+
+    return summary
