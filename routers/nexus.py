@@ -114,7 +114,9 @@ async def webchat_poll(session_id: str):
     """
     bus = _get_bus()
     adapter = bus.adapters.get("webchat")
-    messages = adapter.drain_outbox(session_id) if adapter else []
+    raw = adapter.drain_outbox(session_id) if adapter else []
+    # Normalise: frontend polls for `m.text`; outbox stores `content`.
+    messages = [{**m, "text": m.get("text") or m.get("content", "")} for m in raw]
     return {
         "session_id": session_id,
         "messages": messages,

@@ -1235,7 +1235,7 @@ export const ProjectTableCard: React.FC<ProjectTableCardProps> = ({ title, data 
 
 const _WEBCHAT_BASE = 'http://localhost:8000';
 const _POLL_MS = 500;
-const _TIMEOUT_MS = 30_000;
+const _TIMEOUT_MS = 120_000;
 
 interface _ChatMsg { role: 'user' | 'bot'; content: string; }
 
@@ -1245,21 +1245,42 @@ interface AiChatCardProps {
     config?: { showTitle?: boolean };
     style?: any;
     isInteractive?: boolean;
+    cardId?: string;
 }
 
-export const AiChatCard: React.FC<AiChatCardProps> = ({ title, data = {}, config = {}, style = {}, isInteractive = false }) => {
+export const AiChatCard: React.FC<AiChatCardProps> = ({ title, data = {}, config = {}, style = {}, isInteractive = false, cardId }) => {
     const accentColor = style.accentColor || '#F5C542';
     const placeholder = data?.placeholder || 'Ask me anything...';
 
-    const [messages, setMessages] = React.useState<_ChatMsg[]>([]);
+    const storageKey = cardId ? `webchat_session_id_${cardId}` : 'webchat_session_id';
+    const historyKey = cardId ? `webchat_history_${cardId}` : 'webchat_history';
+
+    const sessionIdRef = React.useRef<string>(
+        (() => {
+            const stored = localStorage.getItem(storageKey);
+            if (stored) return stored;
+            const id = crypto.randomUUID();
+            localStorage.setItem(storageKey, id);
+            return id;
+        })()
+    );
+    const [messages, setMessages] = React.useState<_ChatMsg[]>(() => {
+        try {
+            const stored = localStorage.getItem(historyKey);
+            return stored ? JSON.parse(stored) : [];
+        } catch { return []; }
+    });
     const [inputVal, setInputVal] = React.useState('');
     const [loading, setLoading] = React.useState(false);
-    const sessionIdRef = React.useRef<string>(crypto.randomUUID());
     const bottomRef = React.useRef<HTMLDivElement>(null);
 
     React.useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages, loading]);
+
+    React.useEffect(() => {
+        localStorage.setItem(historyKey, JSON.stringify(messages));
+    }, [messages, historyKey]);
 
     const send = async () => {
         const text = inputVal.trim();
