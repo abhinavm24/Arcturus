@@ -21,6 +21,7 @@ from shared.state import (
     get_stream_chunk_count,
     PROJECT_ROOT,
 )
+from core.auth.context import get_current_user_id, set_current_user_id
 from core.loop import AgentLoop4
 from core.graph_adapter import nx_to_reactflow
 from remme.utils import get_embedding
@@ -46,6 +47,7 @@ class RunRequest(BaseModel):
     source: str = "web"  # "web" or "voice"
     stream: bool = False  # Whether the caller expects a streaming response
     space_id: Optional[str] = None  # Phase 3C: optional space to scope session and retrieval
+    dry_run: Optional[bool] = None  # If True, skip agent; return synthetic run (for automation). None = use DRY_RUN_RUNS env.
 
     def __init__(self, **data):
         super().__init__(**data)
@@ -156,14 +158,15 @@ async def process_run(
     stream: bool = False,
     skill_id: str = None,
     space_id: Optional[str] = None,
+    user_id: str = None,
 ):
     """
     Background task: retrieve Remme memories, run agent loop, extract new memories.
     WATCHTOWER: Root span for the entire agent run.
-    - Span name: run.execute
-    - Wraps: remme retrieval, agent loop, memory extraction
-    - Child spans (agent_loop.run, llm.generate) inherit trace_id automatically
     """
+    if user_id:
+        set_current_user_id(user_id)
+        
     with run_span(run_id, query or "") as span:
         skill = None
         context = None
@@ -219,7 +222,6 @@ async def process_run(
                         pass
                 memory_context, results = retrieve(
                     query,
-                    session_id=run_id,
                     space_id=_space_id,
                 )
                 if memory_context:
@@ -234,7 +236,8 @@ async def process_run(
             # The loop maintains its own internal context and session
             print(f"[{run_id}] MEMORY CONTEXT INJECTED:\n{memory_context}")
             try:
-                context = await loop.run(query, [], {}, [], session_id=run_id, memory_context=memory_context)
+                run_globals = {"user_id": user_id} if user_id else {}
+                context = await loop.run(query, [], run_globals, [], session_id=run_id, memory_context=memory_context, space_id=_space_id)
             except asyncio.CancelledError:
                 span.set_status(Status(StatusCode.ERROR, "cancelled"))
                 print(f"[{run_id}] Run cancelled.")
@@ -715,15 +718,76 @@ def _extract_output_str(data: dict) -> str:
 
 # === Endpoints ===
 
+def _write_dry_run_session(run_id: str, query: str, user_id: str, space_id: Optional[str] = None) -> None:
+    """Write minimal session JSON for dry-run so list_runs finds it."""
+    import os
+    base_dir = PROJECT_ROOT / "memory" / "session_summaries_index"
+    today = datetime.now()
+    date_dir = base_dir / str(today.year) / f"{today.month:02d}" / f"{today.day:02d}"
+    date_dir.mkdir(parents=True, exist_ok=True)
+    session_file = date_dir / f"session_{run_id}.json"
+    graph_data = {
+        "nodes": [
+            {"id": "ROOT", "status": "completed", "agent": "System"},
+            {"id": "DryRun", "status": "completed", "agent": "DryRunAgent", "output": {"result": "Dry-run: no LLM called"}},
+        ],
+        "links": [{"source": "ROOT", "target": "DryRun"}],
+        "directed": True,
+        "multigraph": False,
+        "graph": {
+            "session_id": run_id,
+            "original_query": query,
+            "created_at": datetime.now().isoformat(),
+            "status": "completed",
+            "globals": {"user_id": user_id or ""},
+        },
+    }
+    with open(session_file, "w", encoding="utf-8") as f:
+        json.dump(graph_data, f, indent=2, default=str, ensure_ascii=False)
+
+
 @router.post("/runs")
 async def create_run(request: RunRequest, background_tasks: BackgroundTasks):
-    run_id = str(int(datetime.now().timestamp()))
-    
+    import os
+    run_id = str(int(datetime.now().timestamp() * 1000))
+    user_id = get_current_user_id()
+
+    # Shared Space: verify user has access to the space (owner or shared-with)
+    if request.space_id:
+        try:
+            from memory.knowledge_graph import get_knowledge_graph
+            kg = get_knowledge_graph()
+            if kg and kg.enabled and not kg.can_user_access_space(user_id, request.space_id):
+                raise HTTPException(status_code=403, detail="You do not have access to this space")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+    # Dry-run: skip agent, write synthetic session, return immediately (for automation)
+    dry_run = request.dry_run if request.dry_run is not None else (os.environ.get("DRY_RUN_RUNS", "").lower() == "true")
+    if dry_run:
+        _write_dry_run_session(run_id, request.query, user_id, request.space_id)
+        if request.space_id:
+            try:
+                from memory.knowledge_graph import get_knowledge_graph
+                kg = get_knowledge_graph()
+                if kg and kg.enabled:
+                    kg.get_or_create_session(run_id, space_id=request.space_id)
+            except Exception:
+                pass
+        return {
+            "id": run_id,
+            "status": "completed",
+            "created_at": datetime.now().isoformat(),
+            "query": request.query,
+        }
+
     # Start background execution (Phase 3C: pass space_id for session scoping)
     background_tasks.add_task(
-        process_run, run_id, request.query, request.source, request.stream, None, request.space_id
+        process_run, run_id, request.query, request.source, request.stream, None, request.space_id, user_id
     )
-    
+
     return {
         "id": run_id,
         "status": "starting",
@@ -748,6 +812,12 @@ async def list_runs():
                     # Extract meta
                     graph_details = graph_data.get("graph", {})
                     
+                    # Filter by User ID
+                    run_user_id = graph_details.get("globals", {}).get("user_id")
+                    current_user_id = get_current_user_id()
+                    if current_user_id and run_user_id and run_user_id != current_user_id:
+                        continue
+
                     # Robust Query Extraction
                     query = graph_details.get("original_query")
                     if not query:
@@ -813,6 +883,7 @@ async def get_run(run_id: str):
     # Search disk
     summaries_dir = PROJECT_ROOT / "memory" / "session_summaries_index"
     found_file = None
+    current_user_id = get_current_user_id()
     
     # Brute force search (should optimize path structure later)
     for path in summaries_dir.rglob(f"session_{run_id}.json"):
@@ -821,6 +892,12 @@ async def get_run(run_id: str):
         
     if found_file:
         data = json.loads(found_file.read_text())
+        
+        # Enforce User ID filter
+        run_user_id = data.get("graph", {}).get("globals", {}).get("user_id")
+        if current_user_id and run_user_id and run_user_id != current_user_id:
+            raise HTTPException(status_code=403, detail="Not authorized to view this run")
+
         # Reconstruct Graph to use adapter
         import networkx as nx
         if "edges" in data:
@@ -949,6 +1026,21 @@ async def stop_run(run_id: str):
 @router.delete("/runs/{run_id}")
 async def delete_run(run_id: str):
     """Delete a run from disk and memory"""
+    # Verify ownership before deleting
+    current_user_id = get_current_user_id()
+    summaries_dir = PROJECT_ROOT / "memory" / "session_summaries_index"
+    found_file = None
+    
+    for path in summaries_dir.rglob(f"session_{run_id}.json"):
+        found_file = path
+        break
+        
+    if found_file:
+        data = json.loads(found_file.read_text())
+        run_user_id = data.get("graph", {}).get("globals", {}).get("user_id")
+        if current_user_id and run_user_id and run_user_id != current_user_id:
+            raise HTTPException(status_code=403, detail="Not authorized to delete this run")
+
     # 1. Stop if running
     if run_id in active_loops:
         loop = active_loops[run_id]
@@ -956,7 +1048,6 @@ async def delete_run(run_id: str):
         del active_loops[run_id]
         
     # 2. Delete file
-    summaries_dir = PROJECT_ROOT / "memory" / "session_summaries_index"
     deleted = False
     
     # Brute force search

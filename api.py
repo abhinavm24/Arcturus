@@ -268,6 +268,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+# Inject AuthMiddleware for Phase 5 Authentication (JWT/Guest isolation)
+from core.auth.middleware import AuthMiddleware
+app.add_middleware(AuthMiddleware)
+
 # Enable CORS for Frontend
 app.add_middleware(
     CORSMiddleware,
@@ -291,6 +295,7 @@ from routers import explorer as explorer_router
 from routers import mcp as mcp_router
 from routers import rag as rag_router
 from routers import remme as remme_router
+from routers import graph as graph_router
 from routers import runs as runs_router
 from routers import settings as settings_router
 from routers import explorer as explorer_router
@@ -299,12 +304,18 @@ from routers import mcp as mcp_router
 app.include_router(runs_router.router, prefix="/api")
 app.include_router(rag_router.router, prefix="/api")
 app.include_router(remme_router.router, prefix="/api")
+app.include_router(graph_router.router, prefix="/api")
 from routers import sync as sync_router
 app.include_router(sync_router.router, prefix="/api")
 app.include_router(apps_router.router, prefix="/api")
 app.include_router(settings_router.router, prefix="/api")
 app.include_router(explorer_router.router, prefix="/api")
 app.include_router(mcp_router.router, prefix="/api")
+
+# Phase 5: Authentication endpoints
+from routers import auth as auth_router
+app.include_router(auth_router.router, prefix="/api")
+
 from routers import git as git_router
 from routers import news as news_router
 from routers import prompts as prompts_router

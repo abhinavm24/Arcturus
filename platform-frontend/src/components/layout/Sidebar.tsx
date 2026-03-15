@@ -22,13 +22,14 @@ import { EchoPanel } from '@/components/sidebar/EchoPanel';
 import { AppsSidebar } from '@/features/apps/components/AppsSidebar';
 import { SettingsPanel } from '@/components/sidebar/SettingsPanel';
 import { NewsPanel } from '@/components/sidebar/NewsPanel';
+import { GraphPanel } from '@/components/sidebar/GraphPanel';
 import { StudioSidebar } from '@/features/studio/StudioSidebar';
 import { SwarmSidebar } from '@/features/swarm/SwarmSidebar';
 
 const NavIcon = ({ icon: Icon, label, tab, active, onClick }: {
     icon: any,
     label: string,
-    tab?: 'runs' | 'rag' | 'notes' | 'mcp' | 'remme' | 'explorer' | 'apps' | 'news' | 'learn' | 'settings' | 'ide' | 'scheduler' | 'console' | 'skills' | 'canvas' | 'studio' | 'admin' | 'echo' | 'swarm',
+    tab?: 'runs' | 'rag' | 'notes' | 'mcp' | 'remme' | 'explorer' | 'graph' | 'apps' | 'news' | 'learn' | 'settings' | 'ide' | 'scheduler' | 'console' | 'skills' | 'canvas' | 'studio' | 'admin' | 'echo' | 'swarm',
     active: boolean,
     onClick: () => void
 }) => {
@@ -128,11 +129,14 @@ export const Sidebar: React.FC<{ hideSubPanel?: boolean }> = ({ hideSubPanel }) 
         }
     }, [isNewRunOpen, currentSpaceId, fetchSpaces]);
 
-    // Filter runs by search and by space (Phase 4). When a space is selected, show only runs in that space.
+    // Filter runs by search and by space (Phase 4). Global = only unscoped runs; space = only runs in that space.
     const filteredRuns = React.useMemo(() => {
         let list = runs;
         if (currentSpaceId) {
             list = list.filter((r) => r.space_id === currentSpaceId);
+        } else {
+            // Global: show only runs with no space (unscoped)
+            list = list.filter((r) => !r.space_id || r.space_id === '__global__');
         }
         if (searchQuery.trim()) {
             list = list.filter((run) =>
@@ -165,6 +169,7 @@ export const Sidebar: React.FC<{ hideSubPanel?: boolean }> = ({ hideSubPanel }) 
                     <NavIcon icon={Notebook} label="Notes" tab="notes" active={sidebarTab === 'notes'} onClick={() => setSidebarTab('notes')} />
                     <NavIcon icon={Box} label="MCP" tab="mcp" active={sidebarTab === 'mcp'} onClick={() => setSidebarTab('mcp')} />
                     <NavIcon icon={Brain} label="RemMe" tab="remme" active={sidebarTab === 'remme'} onClick={() => setSidebarTab('remme')} />
+                    <NavIcon icon={Network} label="Graph" tab="graph" active={sidebarTab === 'graph'} onClick={() => setSidebarTab('graph')} />
                     <NavIcon icon={Code2} label="Explorer" tab="explorer" active={sidebarTab === 'explorer'} onClick={() => setSidebarTab('explorer')} />
                     <NavIcon icon={LayoutGrid} label="Canvas" tab="canvas" active={sidebarTab === 'canvas'} onClick={() => setSidebarTab('canvas')} />
                     <NavIcon icon={Network} label="Swarm" tab="swarm" active={sidebarTab === 'swarm'} onClick={() => setSidebarTab('swarm')} />
@@ -401,6 +406,7 @@ export const Sidebar: React.FC<{ hideSubPanel?: boolean }> = ({ hideSubPanel }) 
                     {sidebarTab === 'notes' && <NotesPanel />}
                     {sidebarTab === 'mcp' && <McpPanel />}
                     {sidebarTab === 'remme' && <RemmePanel />}
+                    {sidebarTab === 'graph' && <GraphPanel />}
                     {sidebarTab === 'explorer' && <ExplorerPanel />}
                     {sidebarTab === 'echo' && <EchoPanel />}
                     {sidebarTab === 'studio' && <StudioSidebar />}

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { useAppStore } from '@/store';
 import { Search, Brain, Trash2, Plus, AlertCircle, TriangleAlert, Settings2, Monitor, Shield, Code2, Terminal, Heart, Zap, Utensils, Music, Film, BookOpen, Briefcase, Sparkles, RefreshCw, Coffee, Dog, Palette, MessageSquare, Globe, PawPrint, ListTree, GitPullRequest, FolderOpen } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -77,13 +77,21 @@ export const RemmePanel: React.FC = () => {
 // SNIPPETS VIEW (Original RemmePanel content)
 // ============================================================================
 
+const BANNER_AUTO_DISMISS_MS = 5000;
+
 const SnippetsView: React.FC = () => {
-    const { memories, fetchMemories, addMemory, deleteMemory, cleanupDanglingMemories, isRemmeAddOpen: isAddOpen, setIsRemmeAddOpen: setIsAddOpen, spaces, currentSpaceId, fetchSpaces, setIsSpacesModalOpen } = useAppStore();
+    const { memories, fetchMemories, addMemory, deleteMemory, cleanupDanglingMemories, isRemmeAddOpen: isAddOpen, setIsRemmeAddOpen: setIsAddOpen, spaces, currentSpaceId, setCurrentSpaceId, fetchSpaces, setIsSpacesModalOpen, recommendSpace } = useAppStore();
     const [searchQuery, setSearchQuery] = useState("");
     const [expandedMemoryId, setExpandedMemoryId] = useState<string | null>(null);
     const [newMemoryText, setNewMemoryText] = useState("");
     const [memorySpaceId, setMemorySpaceId] = useState<string | null>(null);
     const [isAdding, setIsAdding] = useState(false);
+    const [recommendedSpaceId, setRecommendedSpaceId] = useState<string | null>(null);
+    const [showRecommendBanner, setShowRecommendBanner] = useState(false);
+    const recommendDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const bannerDismissRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const memorySpaceIdRef = useRef<string | null>(null);
+    memorySpaceIdRef.current = memorySpaceId;
 
     useEffect(() => {
         fetchMemories();
@@ -92,9 +100,44 @@ const SnippetsView: React.FC = () => {
     useEffect(() => {
         if (isAddOpen) {
             setMemorySpaceId(currentSpaceId);
+            setRecommendedSpaceId(null);
+            setShowRecommendBanner(false);
+            if (bannerDismissRef.current) {
+                clearTimeout(bannerDismissRef.current);
+                bannerDismissRef.current = null;
+            }
             fetchSpaces();
         }
     }, [isAddOpen, currentSpaceId, fetchSpaces]);
+
+    // Phase E 4.2: Non-invasive space recommendation — no automatic changes; show banner only.
+    useEffect(() => {
+        if (!isAddOpen || !newMemoryText.trim()) return;
+        if (recommendDebounceRef.current) clearTimeout(recommendDebounceRef.current);
+        recommendDebounceRef.current = setTimeout(() => {
+            recommendDebounceRef.current = null;
+            recommendSpace(newMemoryText.trim(), currentSpaceId)
+                .then(({ recommended_space_id }) => {
+                    const recId = recommended_space_id === '__global__' ? null : recommended_space_id;
+                    const current = memorySpaceIdRef.current ?? '__global__';
+                    const recNorm = recId ?? '__global__';
+                    if (current !== recNorm) {
+                        setRecommendedSpaceId(recId);
+                        setShowRecommendBanner(true);
+                        if (bannerDismissRef.current) clearTimeout(bannerDismissRef.current);
+                        bannerDismissRef.current = setTimeout(() => {
+                            bannerDismissRef.current = null;
+                            setShowRecommendBanner(false);
+                        }, BANNER_AUTO_DISMISS_MS);
+                    }
+                })
+                .catch(() => {});
+        }, 500);
+        return () => {
+            if (recommendDebounceRef.current) clearTimeout(recommendDebounceRef.current);
+            if (bannerDismissRef.current) clearTimeout(bannerDismissRef.current);
+        };
+    }, [isAddOpen, newMemoryText, currentSpaceId, recommendSpace]);
 
     const currentSpaceName = currentSpaceId
         ? spaces.find((s) => s.space_id === currentSpaceId)?.name || 'Space'
@@ -115,13 +158,40 @@ const SnippetsView: React.FC = () => {
 
     const handleAdd = async () => {
         if (!newMemoryText.trim()) return;
+        console.log('[RemmePanel] handleAdd called', { text: newMemoryText.slice(0, 50), space_id: memorySpaceId });
         setIsAdding(true);
         try {
             await addMemory(newMemoryText, "general", memorySpaceId);
             setNewMemoryText("");
+            setRecommendedSpaceId(null);
+            setShowRecommendBanner(false);
             setIsAddOpen(false);
         } finally {
             setIsAdding(false);
+        }
+    };
+
+    const handleAddToRecommended = async () => {
+        if (!newMemoryText.trim()) return;
+        console.log('[RemmePanel] handleAddToRecommended called', { text: newMemoryText.slice(0, 50), recommended_space_id: recommendedSpaceId });
+        setIsAdding(true);
+        try {
+            await addMemory(newMemoryText, "general", recommendedSpaceId);
+            setCurrentSpaceId(recommendedSpaceId);
+            setNewMemoryText("");
+            setRecommendedSpaceId(null);
+            setShowRecommendBanner(false);
+            setIsAddOpen(false);
+        } finally {
+            setIsAdding(false);
+        }
+    };
+
+    const dismissRecommendBanner = () => {
+        setShowRecommendBanner(false);
+        if (bannerDismissRef.current) {
+            clearTimeout(bannerDismissRef.current);
+            bannerDismissRef.current = null;
         }
     };
 
@@ -211,6 +281,33 @@ const SnippetsView: React.FC = () => {
                         }}
                         autoFocus
                     />
+                    {showRecommendBanner && (
+                        <div className="flex items-center justify-between gap-2 py-1.5 px-2 rounded-md bg-muted/60 border border-border/50 text-[10px]">
+                            <span className="text-muted-foreground truncate">
+                                Suggested: Add to {recommendedSpaceId ? (spaces.find((s) => s.space_id === recommendedSpaceId)?.name || 'space') : 'Global'}?
+                            </span>
+                            <div className="flex items-center gap-1 shrink-0">
+                                <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-6 px-2 text-[10px]"
+                                    onClick={handleAddToRecommended}
+                                    disabled={isAdding}
+                                >
+                                    Add to {recommendedSpaceId ? (spaces.find((s) => s.space_id === recommendedSpaceId)?.name || 'space') : 'Global'}
+                                </Button>
+                                <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground"
+                                    onClick={dismissRecommendBanner}
+                                    title="Dismiss"
+                                >
+                                    ×
+                                </Button>
+                            </div>
+                        </div>
+                    )}
                     <div className="flex items-center gap-2">
                         <Button
                             size="sm"

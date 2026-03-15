@@ -1,7 +1,29 @@
 import axios from 'axios';
 import type { Run, Space, PlatformNode, PlatformEdge } from '../types';
+import { useAppStore } from '../store';
 
 export const API_BASE = 'http://localhost:8000/api';
+// Dedicated base URL for Auth and Sync operations (Cloud Hub)
+export const AUTH_API_BASE = import.meta.env.VITE_AUTH_API_BASE || API_BASE;
+
+// --- Axios Interceptors for Auth ---
+axios.interceptors.request.use(
+    (config) => {
+        // Skip auth store access if it's not initialized yet or if it's a completely external URL
+        if (config.url && (config.url.startsWith(API_BASE) || config.url.startsWith(AUTH_API_BASE))) {
+            const state = useAppStore.getState();
+            if (state.authStatus === 'logged_in' && state.authToken) {
+                config.headers['Authorization'] = `Bearer ${state.authToken}`;
+            } else if (state.authUserId) {
+                config.headers['X-User-Id'] = state.authUserId;
+            }
+        }
+        return config;
+    },
+    (error) => {
+        return Promise.reject(error);
+    }
+);
 
 export interface API_Run {
     id: string;
@@ -58,14 +80,22 @@ export const api = {
         }
     },
 
-    createSpace: async (name: string, description?: string, sync_policy?: 'sync' | 'local_only'): Promise<Space> => {
+    createSpace: async (name: string, description?: string, sync_policy?: 'sync' | 'local_only' | 'shared'): Promise<Space> => {
         const payload: { name: string; description?: string; sync_policy?: string } = { name, description: description ?? '' };
         if (sync_policy) payload.sync_policy = sync_policy;
         const res = await axios.post<{ status: string; space_id: string; name: string; description: string }>(
             `${API_BASE}/remme/spaces`,
             payload
         );
-        return { space_id: res.data.space_id, name: res.data.name, description: res.data.description };
+        return { space_id: res.data.space_id, name: res.data.name, description: res.data.description ?? '', sync_policy };
+    },
+
+    shareSpace: async (space_id: string, user_ids: string[]): Promise<{ shared_count: number }> => {
+        const res = await axios.post<{ status: string; space_id: string; shared_count: number }>(
+            `${API_BASE}/remme/spaces/${space_id}/share`,
+            { user_ids }
+        );
+        return { shared_count: res.data.shared_count };
     },
 
     addMemory: async (text: string, category?: string, space_id?: string | null): Promise<void> => {
@@ -77,6 +107,27 @@ export const api = {
     getMemories: async (space_id?: string | null): Promise<{ memories: any[] }> => {
         const params = space_id ? { space_id } : {};
         const res = await axios.get(`${API_BASE}/remme/memories`, { params });
+        return res.data;
+    },
+
+    /** P11 §11.2: Knowledge graph explorer — fetch subgraph (entities + relationships) for visualization. */
+    getGraphExplore: async (space_id?: string | null, limit?: number): Promise<{ nodes: { id: string; label: string; type: string; nodeKind?: 'entity' | 'user' | 'memory' }[]; edges: { source: string; target: string; type: string }[] }> => {
+        const params: Record<string, string | number> = {};
+        if (space_id) params.space_id = space_id;
+        if (limit) params.limit = limit;
+        const res = await axios.get<{ nodes: { id: string; label: string; type: string }[]; edges: { source: string; target: string; type: string }[] }>(
+            `${API_BASE}/graph/explore`,
+            { params }
+        );
+        return res.data;
+    },
+
+    /** Phase E 4.2: Suggest a space for the given memory text (optional current space). User can override. */
+    recommendSpace: async (text: string, current_space_id?: string | null): Promise<{ recommended_space_id: string; reason?: string }> => {
+        const params: Record<string, string> = {};
+        if (text.trim()) params.text = text.trim();
+        if (current_space_id) params.current_space_id = current_space_id;
+        const res = await axios.get<{ recommended_space_id: string; reason?: string }>(`${API_BASE}/remme/recommend-space`, { params });
         return res.data;
     },
 

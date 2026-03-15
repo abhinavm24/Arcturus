@@ -41,6 +41,7 @@ dependencies = [
     "apscheduler>=3.11.2",
     "psutil>=7.2.2",
     "qdrant-client>=1.7.0",
+    "fastembed>=0.4.0",
     "python-pptx>=1.0.2",
     "python-docx>=1.1.2",
     "openpyxl>=3.1.5",
@@ -70,6 +71,12 @@ dependencies = [
     "piper-tts>=1.2.0",
     "pynacl>=1.6.2",
     "mongomock>=4.3.0",
+    "sqlmodel",
+    "alembic",
+    "pyjwt",
+    "passlib",
+    "bcrypt==4.0.1",
+    "email-validator>=2.3.0",
     "chardet<6",
 ]
 
@@ -98,6 +105,7 @@ packages = [
     "session",
 ]
 
+[tool.uv]
 
 [dependency-groups]
 dev = [
