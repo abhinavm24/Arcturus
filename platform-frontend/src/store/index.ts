@@ -441,7 +441,7 @@ interface StudioSlice {
     isStudioModalOpen: boolean;
     fetchArtifacts: () => Promise<void>;
     loadArtifact: (id: string) => Promise<void>;
-    createArtifact: (type: 'slides' | 'documents' | 'sheets', prompt: string, title?: string) => Promise<void>;
+    createArtifact: (type: 'slides' | 'documents' | 'sheets', prompt: string, title?: string, slideMode?: string) => Promise<void>;
     approveError: string | null;
     approveOutline: (id: string, modifications?: Record<string, any>) => Promise<void>;
     rejectOutline: (id: string) => Promise<void>;
@@ -2363,10 +2363,14 @@ export const useAppStore = create<AppState>()(
                     console.error("Failed to load artifact", e);
                 }
             },
-            createArtifact: async (type, prompt, title) => {
+            createArtifact: async (type, prompt, title, slideMode) => {
                 set({ isGenerating: true });
                 try {
-                    const data = await api.createArtifact(type, { prompt, title });
+                    const payload: { prompt: string; title?: string; slide_mode?: string } = { prompt, title };
+                    if (type === 'slides' && slideMode) {
+                        payload.slide_mode = slideMode;
+                    }
+                    const data = await api.createArtifact(type, payload);
                     const createdArtifactId = data?.id ?? data?.artifact_id;
                     if (!createdArtifactId) {
                         throw new Error("Create artifact response missing artifact id");

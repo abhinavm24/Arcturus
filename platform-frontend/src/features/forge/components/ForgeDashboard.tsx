@@ -2,7 +2,8 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import {
     Hammer, Plus, RefreshCw, CheckCircle, XCircle, ChevronRight, ChevronDown,
     History, FileText, Presentation, Table2, Loader2, AlertCircle,
-    Send, AlertTriangle, Eye, Trash2, RotateCcw, Pencil, Palette, Maximize2
+    Send, AlertTriangle, Eye, Trash2, RotateCcw, Pencil, Palette, Maximize2,
+    Code2, Check
 } from 'lucide-react';
 import { useAppStore } from '@/store';
 import { api, API_BASE } from '@/lib/api';
@@ -248,13 +249,39 @@ function OutlineItemWithSlide({
 }) {
     const [aiEditOpen, setAiEditOpen] = useState(false);
     const [textEditOpen, setTextEditOpen] = useState(false);
+    const [htmlEditOpen, setHtmlEditOpen] = useState(false);
+    const [activeTab, setActiveTab] = useState<'html' | 'text' | 'ai'>('html');
     const [editInstruction, setEditInstruction] = useState('');
     const [editLoading, setEditLoading] = useState(false);
     const [directEdits, setDirectEdits] = useState<Record<string, string>>({});
     const [savingDirect, setSavingDirect] = useState(false);
+    const [htmlDraft, setHtmlDraft] = useState('');
+    const [htmlSaving, setHtmlSaving] = useState(false);
+    const [htmlSaved, setHtmlSaved] = useState(false);
     const applyEditInstruction = useAppStore(s => s.applyEditInstruction);
     const patchSlideContent = useAppStore(s => s.patchSlideContent);
     const loadArtifact = useAppStore(s => s.loadArtifact);
+
+    // Sync HTML draft when slide changes
+    useEffect(() => {
+        setHtmlDraft(slide?.html || '');
+        setHtmlSaved(false);
+    }, [slide?.id, slide?.html]);
+
+    const handleHtmlSave = useCallback(async () => {
+        if (!slide || htmlDraft === (slide.html || '')) return;
+        setHtmlSaving(true);
+        try {
+            await patchSlideContent(artifact.id, { [slideIndex]: { html: htmlDraft } }, artifact.revision_head_id);
+            setHtmlSaved(true);
+            setTimeout(() => setHtmlSaved(false), 2000);
+            await loadArtifact(artifact.id);
+        } catch (e: any) {
+            console.error('HTML save failed', e);
+        } finally {
+            setHtmlSaving(false);
+        }
+    }, [slide, slideIndex, htmlDraft, artifact, patchSlideContent, loadArtifact]);
 
     // Measure container for responsive slide scaling
     const slideContainerRef = useRef<HTMLDivElement>(null);
@@ -268,9 +295,6 @@ function OutlineItemWithSlide({
         ro.observe(el);
         return () => ro.disconnect();
     }, []);
-    const slideScale = containerWidth > 0 ? containerWidth / SLIDE_W : 1;
-    const displayH = Math.round(SLIDE_H * slideScale);
-
     // Reset direct edits when slide changes
     useEffect(() => {
         setDirectEdits({});
@@ -337,13 +361,32 @@ function OutlineItemWithSlide({
         return rawDesc.replace(/\.\s*slide_type:\s*\w+\s*$/i, '.').replace(/\s*slide_type:\s*\w+\s*$/i, '').trim() || rawDesc;
     }, [rawDesc]);
 
-    // Text elements for direct editing
+    // Text elements for direct editing (structured slides)
     const textElements = useMemo(() => {
         if (!slide?.elements) return [];
         return slide.elements
             .map((el, i) => ({ idx: i, type: el.type, content: getElementText(el) }))
             .filter(e => e.content.length > 0 && e.type !== 'image');
     }, [slide?.elements]);
+
+    // Extract visible text parts from HTML for the Text tab (HTML slides)
+    const htmlTextParts = useMemo(() => {
+        const src = htmlDraft || slide?.html;
+        if (!src) return [];
+        const parts: { tag: string; text: string; index: number }[] = [];
+        // Parse text content from common HTML text elements
+        const tagRegex = /<(h[1-6]|p|span|li|td|th|a|strong|em|b|i|div|button|label)\b[^>]*>([\s\S]*?)<\/\1>/gi;
+        let match;
+        let idx = 0;
+        while ((match = tagRegex.exec(src)) !== null) {
+            // Strip inner tags to get plain text
+            const inner = match[2].replace(/<[^>]+>/g, '').trim();
+            if (inner.length > 0) {
+                parts.push({ tag: match[1].toLowerCase(), text: inner, index: idx++ });
+            }
+        }
+        return parts;
+    }, [htmlDraft, slide?.html]);
 
     return (
         <div className="border-l-2 border-primary/30 pl-3 min-w-0">
@@ -377,133 +420,296 @@ function OutlineItemWithSlide({
                         )
                     )}
                 </div>
-                {/* Edit buttons (only when slide exists) */}
-                {slide && (
-                    <div className="flex items-center gap-1 shrink-0 mt-0.5">
-                        <button
-                            onClick={() => { setTextEditOpen(o => !o); setAiEditOpen(false); }}
-                            className={cn(
-                                "p-1.5 rounded-md transition-colors",
-                                textEditOpen
-                                    ? "bg-emerald-500/20 text-emerald-400"
-                                    : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                            )}
-                            title="Edit text directly"
-                        >
-                            <FileText className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                            onClick={() => { setAiEditOpen(o => !o); setTextEditOpen(false); }}
-                            className={cn(
-                                "p-1.5 rounded-md transition-colors",
-                                aiEditOpen
-                                    ? "bg-primary/20 text-primary"
-                                    : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                            )}
-                            title="Edit with AI prompt"
-                        >
-                            <Pencil className="w-3.5 h-3.5" />
-                        </button>
-                    </div>
-                )}
             </div>
 
-            {/* Inline slide preview — responsive full-width */}
-            <div ref={slideContainerRef} className="mt-2 mb-1 w-full">
-                {slide && containerWidth > 0 && (
-                    <div
-                        style={{
-                            width: '100%',
-                            height: displayH,
-                            overflow: 'hidden',
-                            position: 'relative',
-                            borderRadius: 8,
-                            border: '1px solid rgba(128,128,128,0.15)',
-                            boxShadow: '0 2px 8px rgba(0,0,0,0.12)',
-                        }}
-                    >
-                        <div
-                            style={{
-                                width: SLIDE_W,
-                                height: SLIDE_H,
-                                transform: `scale(${slideScale})`,
-                                transformOrigin: 'top left',
-                                pointerEvents: 'none',
-                            }}
-                        >
-                            <SlideRenderer
-                                slide={slide}
-                                theme={theme}
-                                slideIndex={slideIndex}
-                                totalSlides={totalSlides}
-                                imageBaseUrl={`${API_BASE}/studio/${artifact.id}/images`}
-                            />
-                        </div>
-                    </div>
-                )}
-            </div>
+            {/* Inline slide preview — split layout: slide left, editor right */}
+            {(() => {
+                const editorOpen = (htmlEditOpen || textEditOpen || aiEditOpen) && !!slide;
+                return (
+                    <div ref={slideContainerRef} className={cn("mt-2 mb-1 w-full", editorOpen && "flex gap-2")}>
+                        {/* Left: slide preview */}
+                        {slide && containerWidth > 0 && (() => {
+                            const previewW = editorOpen ? Math.floor(containerWidth * 0.5) : containerWidth;
+                            const previewScale = previewW / SLIDE_W;
+                            const previewH = Math.round(SLIDE_H * previewScale);
+                            return (
+                                <div
+                                    className={editorOpen ? "w-1/2 shrink-0" : "w-full"}
+                                >
+                                    <div
+                                        style={{
+                                            width: '100%',
+                                            height: previewH,
+                                            overflow: 'hidden',
+                                            position: 'relative',
+                                            borderRadius: 8,
+                                            border: '1px solid rgba(128,128,128,0.15)',
+                                            boxShadow: '0 2px 8px rgba(0,0,0,0.12)',
+                                        }}
+                                    >
+                                        <div
+                                            style={{
+                                                width: SLIDE_W,
+                                                height: SLIDE_H,
+                                                transform: `scale(${previewScale})`,
+                                                transformOrigin: 'top left',
+                                                pointerEvents: 'none',
+                                            }}
+                                        >
+                                            <SlideRenderer
+                                                slide={slide}
+                                                theme={theme}
+                                                slideIndex={slideIndex}
+                                                totalSlides={totalSlides}
+                                                imageBaseUrl={`${API_BASE}/studio/${artifact.id}/images`}
+                                            />
+                                        </div>
+                                        {/* Code2 button — bottom right of slide preview */}
+                                        {slide.html && (
+                                            <button
+                                                onClick={() => {
+                                                    const opening = !htmlEditOpen && !textEditOpen && !aiEditOpen;
+                                                    if (opening) {
+                                                        setHtmlEditOpen(true); setTextEditOpen(false); setAiEditOpen(false); setActiveTab('html');
+                                                    } else {
+                                                        setHtmlEditOpen(false); setTextEditOpen(false); setAiEditOpen(false);
+                                                    }
+                                                }}
+                                                className={cn(
+                                                    "absolute bottom-2 right-2 flex items-center gap-1 px-2 py-1 rounded-md backdrop-blur-sm border font-mono text-[10px] font-semibold transition-all duration-150 shadow-lg",
+                                                    editorOpen
+                                                        ? "bg-orange-500 border-orange-400 text-white"
+                                                        : "bg-black/70 border-white/20 text-white/70 hover:text-orange-400 hover:border-orange-400/50 hover:bg-black/80"
+                                                )}
+                                                style={{ zIndex: 10, pointerEvents: 'auto' }}
+                                                title="Edit slide HTML"
+                                            >
+                                                <Code2 className="w-3.5 h-3.5" />
+                                                <span>&lt;/&gt;</span>
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            );
+                        })()}
 
-            {/* AI prompt edit input */}
-            {aiEditOpen && slide && (
-                <div className="mt-2 mb-2 flex gap-2 items-start">
-                    <Input
-                        value={editInstruction}
-                        onChange={e => setEditInstruction(e.target.value)}
-                        placeholder="e.g. Make it more visual, add a chart..."
-                        className="text-xs h-8 flex-1"
-                        onKeyDown={e => e.key === 'Enter' && handleAiEdit()}
-                    />
-                    <Button
-                        size="sm"
-                        className="h-8 px-3 text-xs"
-                        onClick={handleAiEdit}
-                        disabled={editLoading || !editInstruction.trim()}
-                    >
-                        {editLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
-                    </Button>
-                </div>
-            )}
+                        {/* Right: 3-tab editor panel */}
+                        {editorOpen && slide && (
+                            <div className="w-1/2 rounded-lg border border-border/30 bg-muted/10 overflow-hidden flex flex-col">
+                                {/* Tab bar */}
+                                <div className="flex border-b border-border/20 shrink-0">
+                                    {slide.html && (
+                                        <button
+                                            onClick={() => setActiveTab('html')}
+                                            className={cn(
+                                                "flex items-center gap-1.5 px-3 py-2 text-[11px] font-medium transition-colors border-b-2 -mb-px",
+                                                activeTab === 'html'
+                                                    ? "border-orange-400 text-orange-400"
+                                                    : "border-transparent text-muted-foreground hover:text-foreground"
+                                            )}
+                                        >
+                                            <Code2 className="w-3 h-3" /> HTML
+                                        </button>
+                                    )}
+                                    <button
+                                        onClick={() => setActiveTab('text')}
+                                        className={cn(
+                                            "flex items-center gap-1.5 px-3 py-2 text-[11px] font-medium transition-colors border-b-2 -mb-px",
+                                            activeTab === 'text'
+                                                ? "border-emerald-400 text-emerald-400"
+                                                : "border-transparent text-muted-foreground hover:text-foreground"
+                                        )}
+                                    >
+                                        <FileText className="w-3 h-3" /> Text
+                                    </button>
+                                    <button
+                                        onClick={() => setActiveTab('ai')}
+                                        className={cn(
+                                            "flex items-center gap-1.5 px-3 py-2 text-[11px] font-medium transition-colors border-b-2 -mb-px",
+                                            activeTab === 'ai'
+                                                ? "border-primary text-primary"
+                                                : "border-transparent text-muted-foreground hover:text-foreground"
+                                        )}
+                                    >
+                                        <Pencil className="w-3 h-3" /> AI Edit
+                                    </button>
+                                    {/* Save/Reset buttons inline with tabs */}
+                                    {activeTab === 'html' && slide.html && (
+                                        <div className="ml-auto flex items-center gap-2 px-2">
+                                            {htmlDraft !== (slide.html || '') && (
+                                                <button
+                                                    onClick={() => { setHtmlDraft(slide.html || ''); setHtmlSaved(false); }}
+                                                    className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                                                >
+                                                    Reset
+                                                </button>
+                                            )}
+                                            <Button
+                                                size="sm"
+                                                onClick={handleHtmlSave}
+                                                disabled={htmlSaving || htmlDraft === (slide.html || '')}
+                                                className="h-6 text-[10px] px-2.5 bg-orange-600 hover:bg-orange-500 text-white disabled:opacity-40"
+                                            >
+                                                {htmlSaving ? (
+                                                    <><Loader2 className="w-3 h-3 animate-spin mr-1" /> Saving...</>
+                                                ) : htmlSaved ? (
+                                                    <><Check className="w-3 h-3 mr-1" /> Saved</>
+                                                ) : (
+                                                    'Save'
+                                                )}
+                                            </Button>
+                                        </div>
+                                    )}
+                                </div>
 
-            {/* Direct text editing panel */}
-            {textEditOpen && slide && (
-                <div className="mt-2 mb-2 space-y-2 rounded-lg border border-border/30 bg-muted/10 p-3">
-                    {/* Slide title */}
-                    <div>
-                        <label className="text-[10px] text-muted-foreground uppercase tracking-wider">Title</label>
-                        <input
-                            className="w-full text-xs text-foreground bg-transparent border-b border-border/50 focus:border-primary/60 outline-none py-1"
-                            value={directEdits.title ?? slide.title ?? ''}
-                            onChange={e => setDirectEdits(prev => ({ ...prev, title: e.target.value }))}
-                        />
-                    </div>
-                    {/* Text elements */}
-                    {textElements.map(el => {
-                        const key = `element_${el.idx}_content`;
-                        return (
-                            <div key={key}>
-                                <label className="text-[10px] text-muted-foreground uppercase tracking-wider">
-                                    {el.type}
-                                </label>
-                                <textarea
-                                    className="w-full text-xs text-foreground bg-transparent border border-border/30 rounded p-1.5 focus:border-primary/60 outline-none resize-none"
-                                    value={directEdits[key] ?? el.content}
-                                    onChange={e => setDirectEdits(prev => ({ ...prev, [key]: e.target.value }))}
-                                    rows={Math.min(4, el.content.split('\n').length + 1)}
-                                />
+                                {/* Tab content — scrollable */}
+                                <div className="flex-1 overflow-auto min-h-0">
+                                    {/* HTML tab — syntax highlighted overlay */}
+                                    {activeTab === 'html' && slide.html && (
+                                        <div className="h-full flex flex-col p-2">
+                                            <div className="relative flex-1 min-h-[120px] rounded-md overflow-hidden" style={{ background: '#1e1e2e', border: '1px solid #313244' }}>
+                                                {/* Highlighted layer (behind) */}
+                                                <pre
+                                                    className="absolute inset-0 text-[10px] font-mono leading-relaxed p-2 m-0 overflow-auto whitespace-pre-wrap break-words pointer-events-none"
+                                                    aria-hidden="true"
+                                                    dangerouslySetInnerHTML={{ __html: (() => {
+                                                        // Simple HTML syntax highlighter
+                                                        const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                                                        return htmlDraft.replace(/<!--[\s\S]*?-->|<\/?[\w-]+(?:\s+[\w-]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*))?)*\s*\/?>|[^<]+/g, (match) => {
+                                                            if (match.startsWith('<!--')) {
+                                                                return `<span style="color:#6a737d;font-style:italic">${esc(match)}</span>`;
+                                                            }
+                                                            if (match.startsWith('<')) {
+                                                                return match.replace(
+                                                                    /(<\/?)([\w-]+)((?:\s+[\w-]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*))?)*\s*)(\/?>)/g,
+                                                                    (_m, open, tag, attrs, close) => {
+                                                                        const coloredAttrs = attrs.replace(
+                                                                            /([\w-]+)(\s*=\s*)("[^"]*"|'[^']*')/g,
+                                                                            (_a: string, name: string, eq: string, val: string) =>
+                                                                                `<span style="color:#9cdcfe">${esc(name)}</span><span style="color:#cdd6f4">${esc(eq)}</span><span style="color:#ce9178">${esc(val)}</span>`
+                                                                        );
+                                                                        return `<span style="color:#808080">${esc(open)}</span><span style="color:#569cd6">${esc(tag)}</span>${coloredAttrs}<span style="color:#808080">${esc(close)}</span>`;
+                                                                    }
+                                                                );
+                                                            }
+                                                            // Text content — bright white
+                                                            return `<span style="color:#f0f0f0">${esc(match)}</span>`;
+                                                        });
+                                                    })() }}
+                                                />
+                                                {/* Editable textarea (on top, transparent text) */}
+                                                <textarea
+                                                    value={htmlDraft}
+                                                    onChange={e => { setHtmlDraft(e.target.value); setHtmlSaved(false); }}
+                                                    spellCheck={false}
+                                                    className="absolute inset-0 w-full h-full text-[10px] font-mono leading-relaxed p-2 bg-transparent resize-none focus:outline-none"
+                                                    style={{ color: 'transparent', caretColor: '#f0f0f0', WebkitTextFillColor: 'transparent' }}
+                                                />
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Text tab */}
+                                    {activeTab === 'text' && (
+                                        <div className="p-3 space-y-2 overflow-auto">
+                                            {slide.html ? (
+                                                /* HTML slide: extract text parts and allow inline editing */
+                                                <>
+                                                    {htmlTextParts.length === 0 && (
+                                                        <p className="text-xs text-muted-foreground italic">No editable text found in this slide.</p>
+                                                    )}
+                                                    {htmlTextParts.map((part) => (
+                                                        <div key={part.index}>
+                                                            <label className="text-[10px] text-muted-foreground uppercase tracking-wider">
+                                                                &lt;{part.tag}&gt;
+                                                            </label>
+                                                            <input
+                                                                className="w-full text-xs text-foreground bg-transparent border-b border-border/50 focus:border-primary/60 outline-none py-1"
+                                                                defaultValue={part.text}
+                                                                onBlur={e => {
+                                                                    const newText = e.target.value;
+                                                                    if (newText !== part.text) {
+                                                                        // Replace the text in the HTML draft
+                                                                        setHtmlDraft(prev => prev.replace(part.text, newText));
+                                                                        setHtmlSaved(false);
+                                                                    }
+                                                                }}
+                                                            />
+                                                        </div>
+                                                    ))}
+                                                    {htmlTextParts.length > 0 && htmlDraft !== (slide.html || '') && (
+                                                        <p className="text-[10px] text-orange-400/70 italic">Text changes applied to HTML. Use Save on HTML tab to persist.</p>
+                                                    )}
+                                                </>
+                                            ) : (
+                                                /* Structured slide: edit elements directly */
+                                                <>
+                                                    <div>
+                                                        <label className="text-[10px] text-muted-foreground uppercase tracking-wider">Title</label>
+                                                        <input
+                                                            className="w-full text-xs text-foreground bg-transparent border-b border-border/50 focus:border-primary/60 outline-none py-1"
+                                                            value={directEdits.title ?? slide.title ?? ''}
+                                                            onChange={e => setDirectEdits(prev => ({ ...prev, title: e.target.value }))}
+                                                        />
+                                                    </div>
+                                                    {textElements.map(el => {
+                                                        const key = `element_${el.idx}_content`;
+                                                        return (
+                                                            <div key={key}>
+                                                                <label className="text-[10px] text-muted-foreground uppercase tracking-wider">
+                                                                    {el.type}
+                                                                </label>
+                                                                <textarea
+                                                                    className="w-full text-xs text-foreground bg-transparent border border-border/30 rounded p-1.5 focus:border-primary/60 outline-none resize-none"
+                                                                    value={directEdits[key] ?? el.content}
+                                                                    onChange={e => setDirectEdits(prev => ({ ...prev, [key]: e.target.value }))}
+                                                                    rows={Math.min(4, el.content.split('\n').length + 1)}
+                                                                />
+                                                            </div>
+                                                        );
+                                                    })}
+                                                    <Button
+                                                        size="sm"
+                                                        className="h-7 px-3 text-xs w-full"
+                                                        onClick={handleDirectSave}
+                                                        disabled={savingDirect || Object.keys(directEdits).length === 0}
+                                                    >
+                                                        {savingDirect ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <CheckCircle className="w-3 h-3 mr-1" />}
+                                                        Save Text Changes
+                                                    </Button>
+                                                </>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {/* AI tab */}
+                                    {activeTab === 'ai' && (
+                                        <div className="p-3">
+                                            <div className="flex gap-2 items-start">
+                                                <Input
+                                                    value={editInstruction}
+                                                    onChange={e => setEditInstruction(e.target.value)}
+                                                    placeholder="e.g. Make it more visual, add a chart..."
+                                                    className="text-xs h-8 flex-1"
+                                                    onKeyDown={e => e.key === 'Enter' && handleAiEdit()}
+                                                />
+                                                <Button
+                                                    size="sm"
+                                                    className="h-8 px-3 text-xs"
+                                                    onClick={handleAiEdit}
+                                                    disabled={editLoading || !editInstruction.trim()}
+                                                >
+                                                    {editLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
                             </div>
-                        );
-                    })}
-                    <Button
-                        size="sm"
-                        className="h-7 px-3 text-xs w-full"
-                        onClick={handleDirectSave}
-                        disabled={savingDirect || Object.keys(directEdits).length === 0}
-                    >
-                        {savingDirect ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <CheckCircle className="w-3 h-3 mr-1" />}
-                        Save Text Changes
-                    </Button>
-                </div>
-            )}
+                        )}
+                    </div>
+                );
+            })()}
 
             {children}
         </div>
@@ -517,12 +723,13 @@ function CreateDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
     const isGenerating = useAppStore(s => s.isGenerating);
 
     const [type, setType] = useState<'slides' | 'documents' | 'sheets'>('slides');
+    const [slideMode, setSlideMode] = useState<'artistic' | 'business'>('artistic');
     const [title, setTitle] = useState('');
     const [prompt, setPrompt] = useState('');
 
     const handleCreate = async () => {
         if (!prompt.trim()) return;
-        await createArtifact(type, prompt, title || undefined);
+        await createArtifact(type, prompt, title || undefined, type === 'slides' ? slideMode : undefined);
         setTitle('');
         setPrompt('');
         onOpenChange(false);
@@ -559,6 +766,45 @@ function CreateDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
                             );
                         })}
                     </div>
+
+                    {/* Slide mode selector — only for slides */}
+                    {type === 'slides' && (
+                        <div className="space-y-2">
+                            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Slide style</label>
+                            <div className="grid grid-cols-2 gap-2">
+                                <button
+                                    onClick={() => setSlideMode('artistic')}
+                                    className={cn(
+                                        "flex items-center gap-3 p-3 rounded-lg border transition-all duration-200 text-left",
+                                        slideMode === 'artistic'
+                                            ? "border-primary bg-primary/10 text-primary"
+                                            : "border-border hover:border-primary/50 text-muted-foreground hover:text-foreground"
+                                    )}
+                                >
+                                    <Palette className="w-4 h-4 shrink-0" />
+                                    <div>
+                                        <div className="text-sm font-medium">Artistic</div>
+                                        <div className="text-[10px] opacity-70">Rich HTML, creative layouts</div>
+                                    </div>
+                                </button>
+                                <button
+                                    onClick={() => setSlideMode('business')}
+                                    className={cn(
+                                        "flex items-center gap-3 p-3 rounded-lg border transition-all duration-200 text-left",
+                                        slideMode === 'business'
+                                            ? "border-primary bg-primary/10 text-primary"
+                                            : "border-border hover:border-primary/50 text-muted-foreground hover:text-foreground"
+                                    )}
+                                >
+                                    <Presentation className="w-4 h-4 shrink-0" />
+                                    <div>
+                                        <div className="text-sm font-medium">Business</div>
+                                        <div className="text-[10px] opacity-70">Clean templates, PPTX-optimized</div>
+                                    </div>
+                                </button>
+                            </div>
+                        </div>
+                    )}
 
                     {/* Quick-start templates */}
                     <div className="space-y-2">

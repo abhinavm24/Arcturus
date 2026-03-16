@@ -1,4 +1,4 @@
-"""AI image generation for Forge slide exports using Gemini."""
+"""Image resolution for Forge slides: web search (DuckDuckGo) + AI fallback."""
 
 import asyncio
 import io
@@ -138,22 +138,102 @@ def _extract_html_placeholders(html: str) -> list[tuple[str, str]]:
     return results
 
 
-async def _search_image_url(query: str) -> str | None:
-    """Search the web for an image matching the query. Returns URL or None."""
+# Domains that block hotlinking / require auth — skip these in image search
+_BLOCKED_IMAGE_DOMAINS = {
+    "shutterstock.com", "gettyimages.com", "istockphoto.com",
+    "alamy.com", "dreamstime.com", "depositphotos.com",
+    "123rf.com", "stock.adobe.com", "adobestock.com",
+    "freepik.com",
+}
+
+
+def _is_embeddable_url(url: str) -> bool:
+    """Check if the image URL is from a domain that allows hotlinking."""
     try:
-        from core.gateway_services.search_service import web_search
-        result = await web_search(f"{query} high quality photo", limit=5)
-        if result.get("status") != "success":
-            return None
-        # Look for image URLs in results
-        for r in result.get("results", []):
-            url = r.get("url", "")
-            # Prefer URLs that look like images
-            if any(ext in url.lower() for ext in (".jpg", ".jpeg", ".png", ".webp")):
-                return url
-        # Return first result URL as fallback (may be a page with images)
-        results = result.get("results", [])
-        return results[0]["url"] if results else None
+        from urllib.parse import urlparse
+        host = urlparse(url).hostname or ""
+        # Check against blocked domains (match suffix for subdomains)
+        return not any(host == d or host.endswith("." + d) for d in _BLOCKED_IMAGE_DOMAINS)
+    except Exception:
+        return True
+
+
+async def _search_image_url(query: str) -> str | None:
+    """Search the web for an embeddable image URL using DuckDuckGo image search.
+
+    Skips stock photo sites that block hotlinking.
+    Validates the URL returns an actual image via HEAD request.
+    Returns a direct image URL (jpg/png/webp) or None.
+    """
+    try:
+        import re
+        import urllib.parse
+        import httpx
+
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_4) "
+                "AppleWebKit/537.36 Chrome/113.0.5672.92 Safari/537.36"
+            ),
+            "Referer": "https://duckduckgo.com/",
+        }
+
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True, headers=headers) as client:
+            # Step 1: Get vqd token from DuckDuckGo
+            token_url = (
+                f"https://duckduckgo.com/?q={urllib.parse.quote(query)}"
+                "&iax=images&ia=images"
+            )
+            r = await client.get(token_url, headers=headers)
+            vqd_match = re.search(r'vqd="([^"]+)"', r.text) or re.search(
+                r"vqd=([^&\"]+)", r.text
+            )
+            if not vqd_match:
+                logger.debug("No vqd token for image search: %r", query)
+                return None
+
+            vqd = vqd_match.group(1)
+
+            # Step 2: Query the image API
+            img_api = (
+                f"https://duckduckgo.com/i.js?l=wt-wt&o=json"
+                f"&q={urllib.parse.quote(query)}&vqd={vqd}&f=,,,,,&p=1"
+            )
+            r2 = await client.get(img_api, headers=headers)
+            data = r2.json()
+
+            # Step 3: Pick the best embeddable image URL
+            for item in data.get("results", [])[:20]:
+                url = item.get("image", "")
+                if not url:
+                    continue
+                # Skip stock photo sites that block hotlinking
+                if not _is_embeddable_url(url):
+                    continue
+                # Prefer URLs with image extensions
+                if any(ext in url.lower() for ext in (".jpg", ".jpeg", ".png", ".webp")):
+                    # Quick HEAD check to verify the URL actually serves an image
+                    try:
+                        head = await client.head(url, timeout=5)
+                        ct = head.headers.get("content-type", "")
+                        if head.status_code == 200 and "image" in ct:
+                            return url
+                    except Exception:
+                        continue
+
+            # Fallback: try any result that passes the embeddable check
+            for item in data.get("results", [])[:20]:
+                url = item.get("image", "")
+                if url and _is_embeddable_url(url):
+                    try:
+                        head = await client.head(url, timeout=5)
+                        ct = head.headers.get("content-type", "")
+                        if head.status_code == 200 and "image" in ct:
+                            return url
+                    except Exception:
+                        continue
+
+        return None
     except Exception as e:
         logger.debug("Image search failed for %r: %s", query, e)
         return None
@@ -163,25 +243,18 @@ async def _resolve_single_placeholder(
     alt_text: str,
     sem: asyncio.Semaphore,
 ) -> str | None:
-    """Try web search first, then fall back to Gemini image generation.
+    """Search the web for a real image matching the alt text.
 
-    Returns an image URL string, or None on failure.
+    Returns an image URL string, or None if no image found.
+    No AI generation fallback — we only use real images from the web.
     """
     async with sem:
-        # Try web search for a real image first
         url = await _search_image_url(alt_text)
         if url:
+            logger.info("Found image for %r: %s", alt_text[:60], url[:100])
             return url
 
-        # Fall back to AI-generated image
-        buf = await generate_single_image(alt_text)
-        if buf is not None:
-            # Encode as data URI (JPEG) for inline embedding
-            import base64
-            buf.seek(0)
-            b64 = base64.b64encode(buf.read()).decode("ascii")
-            return f"data:image/jpeg;base64,{b64}"
-
+        logger.info("No image found for %r", alt_text[:60])
         return None
 
 
@@ -189,7 +262,7 @@ async def resolve_html_images(content_tree_dict: Dict[str, Any]) -> bool:
     """Resolve <img data-placeholder="true"> tags in slide HTML fields.
 
     Mutates content_tree_dict in-place: replaces placeholder <img> tags with
-    ones that have real src URLs (from web search or AI generation).
+    ones that have real src URLs from web image search.
 
     Returns True if any placeholders were resolved.
     """

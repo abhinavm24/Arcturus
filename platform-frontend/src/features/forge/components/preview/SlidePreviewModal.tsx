@@ -80,6 +80,7 @@ function SlidePreviewContent() {
   const [navDirection, setNavDirection] = useState<NavDirection>('right');
   const [slideKey, setSlideKey] = useState(0);
   const [slideshowMode, setSlideshowMode] = useState(false);
+  const [showHtmlEditor, setShowHtmlEditor] = useState(false);
 
   // Resolve theme object from ID
   const theme: SlideTheme = useMemo(() => {
@@ -387,6 +388,7 @@ function SlidePreviewContent() {
                 totalSlides={slides.length}
                 imageBaseUrl={imageBaseUrl}
                 availableImageIds={availableImageIds}
+                onEditHtml={activeSlide.html ? () => setShowHtmlEditor(true) : undefined}
               />
             </div>
           </div>
@@ -398,6 +400,8 @@ function SlidePreviewContent() {
           activeSlide={activeSlide}
           slideIndex={clampedIndex}
           revisionHeadId={activeArtifact.revision_head_id}
+          showHtml={showHtmlEditor}
+          onToggleHtml={() => setShowHtmlEditor(v => !v)}
         />
       </div>
 

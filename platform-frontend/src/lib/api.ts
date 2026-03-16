@@ -234,7 +234,7 @@ export const api = {
         return res.data;
     },
 
-    createArtifact: async (type: 'slides' | 'documents' | 'sheets', payload: { prompt: string; title?: string; parameters?: Record<string, any> }): Promise<any> => {
+    createArtifact: async (type: 'slides' | 'documents' | 'sheets', payload: { prompt: string; title?: string; parameters?: Record<string, any>; slide_mode?: string }): Promise<any> => {
         const res = await axios.post(`${API_BASE}/studio/${type}`, payload);
         return res.data;
     },

@@ -8,6 +8,7 @@ import { RENDERERS, SlideFrame } from './renderers';
 import type { SlideTheme } from './renderers';
 import type { SlideStyle } from './renderers/SlideFrame';
 import { HtmlSlide } from './renderers/HtmlSlide';
+import { Code2 } from 'lucide-react';
 import type { Slide } from './normalizers';
 
 interface SlideRendererProps {
@@ -20,11 +21,13 @@ interface SlideRendererProps {
   imageBaseUrl?: string;
   /** Set of slide IDs whose images are confirmed available */
   availableImageIds?: ReadonlySet<string>;
+  /** Callback when the HTML edit button is clicked */
+  onEditHtml?: () => void;
 }
 
 const TITLE_BG_TYPES = new Set(['title', 'section_divider']);
 
-export function SlideRenderer({ slide, theme, slideIndex, totalSlides, isThumb = false, imageBaseUrl, availableImageIds }: SlideRendererProps) {
+export function SlideRenderer({ slide, theme, slideIndex, totalSlides, isThumb = false, imageBaseUrl, availableImageIds, onEditHtml }: SlideRendererProps) {
   // HTML-first: if LLM provided full HTML, render it directly (bypass SlideFrame)
   if (slide.html) {
     return (
@@ -41,6 +44,17 @@ export function SlideRenderer({ slide, theme, slideIndex, totalSlides, isThumb =
           >
             {slideIndex + 1} / {totalSlides}
           </div>
+        )}
+        {/* HTML edit button */}
+        {!isThumb && onEditHtml && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onEditHtml(); }}
+            className="absolute top-2.5 right-10 p-1.5 rounded-md bg-black/60 backdrop-blur-sm border border-white/15 text-white/50 hover:text-orange-400 hover:border-orange-400/40 hover:bg-black/80 transition-colors duration-150"
+            style={{ zIndex: 20 }}
+            title="Edit slide HTML"
+          >
+            <Code2 className="w-3.5 h-3.5" />
+          </button>
         )}
       </div>
     );

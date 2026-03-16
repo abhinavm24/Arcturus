@@ -247,6 +247,7 @@ class Artifact(BaseModel):
     schema_version: str = "1.0"
     model: Optional[str] = None
     creation_prompt: Optional[str] = None
+    slide_mode: Optional[str] = None  # "artistic" (default) or "business"
     content_tree: Optional[Dict[str, Any]] = None
     theme_id: Optional[str] = None
     custom_theme: Optional[Dict[str, Any]] = None

@@ -23,6 +23,7 @@ class CreateArtifactRequest(BaseModel):
     title: Optional[str] = None
     parameters: Optional[Dict] = Field(default_factory=dict)
     model: Optional[str] = None
+    slide_mode: Optional[str] = None  # "artistic" (default) or "business"
 
 
 class ApproveOutlineRequest(BaseModel):
@@ -110,6 +111,7 @@ async def _create_artifact(request: CreateArtifactRequest, artifact_type: Artifa
             parameters=request.parameters,
             title=request.title,
             model=request.model,
+            slide_mode=request.slide_mode,
         )
         return result
     except ValidationError as e:
@@ -218,6 +220,11 @@ async def patch_content_tree(artifact_id: str, request: PatchContentRequest):
                 if old != value:
                     slide["title"] = value
                     changes.append(f"Slide {idx+1} title")
+            elif field == "html":
+                old = slide.get("html", "")
+                if old != value:
+                    slide["html"] = value
+                    changes.append(f"Slide {idx+1} html")
             elif field.startswith("element_") and field.endswith("_content"):
                 # e.g. element_0_content → elements[0].content
                 parts = field.split("_")

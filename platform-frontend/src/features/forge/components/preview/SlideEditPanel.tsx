@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Send, Loader2, AlertCircle, AlertTriangle, History, MessageSquare, StickyNote, RotateCcw } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Send, Loader2, AlertCircle, AlertTriangle, History, MessageSquare, StickyNote, RotateCcw, Code2, Check } from 'lucide-react';
 import { useAppStore } from '@/store';
 import { api } from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -14,9 +14,13 @@ interface SlideEditPanelProps {
   activeSlide: Slide;
   slideIndex: number;
   revisionHeadId?: string;
+  /** Controlled: whether HTML editor is open */
+  showHtml?: boolean;
+  /** Controlled: toggle HTML editor */
+  onToggleHtml?: () => void;
 }
 
-export function SlideEditPanel({ artifactId, activeSlide, slideIndex, revisionHeadId }: SlideEditPanelProps) {
+export function SlideEditPanel({ artifactId, activeSlide, slideIndex, revisionHeadId, showHtml: showHtmlProp, onToggleHtml }: SlideEditPanelProps) {
   const applyEditInstruction = useAppStore(s => s.applyEditInstruction);
   const editLoading = useAppStore(s => s.editLoading);
   const editError = useAppStore(s => s.editError);
@@ -28,8 +32,15 @@ export function SlideEditPanel({ artifactId, activeSlide, slideIndex, revisionHe
   const [revisions, setRevisions] = useState<{ id: string; change_summary: string; created_at?: string }[]>([]);
   const [revisionsLoading, setRevisionsLoading] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
+  const [showHtmlLocal, setShowHtmlLocal] = useState(false);
+  const showHtml = showHtmlProp ?? showHtmlLocal;
+  const toggleHtml = onToggleHtml ?? (() => setShowHtmlLocal(v => !v));
+  const [htmlDraft, setHtmlDraft] = useState('');
+  const [htmlSaving, setHtmlSaving] = useState(false);
+  const [htmlSaved, setHtmlSaved] = useState(false);
   const [restoreLoading, setRestoreLoading] = useState(false);
   const [restoreError, setRestoreError] = useState<string | null>(null);
+  const patchSlideContent = useAppStore(s => s.patchSlideContent);
 
   const handleRestore = async (revisionId: string, changeSummary: string) => {
     if (!window.confirm(`Restore to '${changeSummary}'? This will create a new revision.`)) return;
@@ -48,6 +59,31 @@ export function SlideEditPanel({ artifactId, activeSlide, slideIndex, revisionHe
       }
     } finally {
       setRestoreLoading(false);
+    }
+  };
+
+  // Sync HTML draft when active slide changes
+  useEffect(() => {
+    setHtmlDraft(activeSlide.html || '');
+    setHtmlSaved(false);
+  }, [activeSlide.id, activeSlide.html]);
+
+  const handleHtmlSave = async () => {
+    if (htmlDraft === (activeSlide.html || '')) return;
+    setHtmlSaving(true);
+    try {
+      await patchSlideContent(artifactId, { [slideIndex]: { html: htmlDraft } }, revisionHeadId);
+      setHtmlSaved(true);
+      setTimeout(() => setHtmlSaved(false), 2000);
+      // Refresh revisions
+      try {
+        const data = await api.listRevisions(artifactId);
+        setRevisions(data);
+      } catch { /* ignore */ }
+    } catch (e: any) {
+      console.error('HTML save failed', e);
+    } finally {
+      setHtmlSaving(false);
     }
   };
 
@@ -210,6 +246,56 @@ export function SlideEditPanel({ artifactId, activeSlide, slideIndex, revisionHe
           </div>
         )}
       </div>
+
+      {/* HTML Editor Toggle */}
+      {activeSlide.html && (
+        <div className="border-t border-white/[0.06]">
+          <button
+            onClick={toggleHtml}
+            className={cn(
+              'w-full flex items-center gap-2 px-4 py-2.5 text-xs transition-colors',
+              showHtml ? 'text-orange-400/80' : 'text-white/30 hover:text-white/50'
+            )}
+          >
+            <Code2 className="w-3 h-3" />
+            Edit HTML
+          </button>
+          {showHtml && (
+            <div className="px-3 pb-3 space-y-2">
+              <textarea
+                value={htmlDraft}
+                onChange={e => { setHtmlDraft(e.target.value); setHtmlSaved(false); }}
+                spellCheck={false}
+                className="w-full h-48 text-[10px] font-mono leading-relaxed bg-black/40 border border-white/[0.08] rounded-md p-2 text-orange-200/80 placeholder:text-white/15 focus:border-orange-500/40 focus:outline-none resize-y"
+              />
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  onClick={handleHtmlSave}
+                  disabled={htmlSaving || htmlDraft === (activeSlide.html || '')}
+                  className="h-7 text-[10px] bg-orange-600 hover:bg-orange-500 text-white disabled:opacity-40"
+                >
+                  {htmlSaving ? (
+                    <><Loader2 className="w-3 h-3 animate-spin mr-1" /> Saving...</>
+                  ) : htmlSaved ? (
+                    <><Check className="w-3 h-3 mr-1" /> Saved</>
+                  ) : (
+                    'Save HTML'
+                  )}
+                </Button>
+                {htmlDraft !== (activeSlide.html || '') && (
+                  <button
+                    onClick={() => { setHtmlDraft(activeSlide.html || ''); setHtmlSaved(false); }}
+                    className="text-[10px] text-white/30 hover:text-white/60 transition-colors"
+                  >
+                    Reset
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

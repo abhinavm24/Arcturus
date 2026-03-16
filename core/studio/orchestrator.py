@@ -50,6 +50,7 @@ class ForgeOrchestrator:
         parameters: Optional[Dict[str, Any]] = None,
         title: Optional[str] = None,
         model: Optional[str] = None,
+        slide_mode: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Generate an outline for a new artifact.
 
@@ -58,7 +59,7 @@ class ForgeOrchestrator:
         parameters = parameters or {}
 
         # Build prompt and call LLM
-        llm_prompt = get_outline_prompt(artifact_type, prompt, parameters)
+        llm_prompt = get_outline_prompt(artifact_type, prompt, parameters, slide_mode=slide_mode)
         mm = ModelManager(model_name=model) if model else ModelManager()
         raw = await mm.generate_text(llm_prompt)
 
@@ -81,44 +82,47 @@ class ForgeOrchestrator:
         )
 
         # Slides-specific outline normalization
+        is_business = slide_mode == "business"
         recommended_theme_id = None
         custom_theme_dict = None
         if artifact_type == ArtifactType.slides:
             from core.studio.slides.generator import normalize_slide_outline
             outline = normalize_slide_outline(outline, parameters, prompt)
 
-            # Extract LLM-recommended base theme
-            raw_theme_id = parsed.get("recommended_theme_id")
-            if raw_theme_id and isinstance(raw_theme_id, str):
-                from core.studio.slides.themes import get_theme_ids
-                valid_ids = set(get_theme_ids())
-                if raw_theme_id.strip() in valid_ids:
-                    recommended_theme_id = raw_theme_id.strip()
-                    logger.info("LLM recommended base theme: %s", recommended_theme_id)
+            # Theme extraction — artistic mode only
+            if not is_business:
+                # Extract LLM-recommended base theme
+                raw_theme_id = parsed.get("recommended_theme_id")
+                if raw_theme_id and isinstance(raw_theme_id, str):
+                    from core.studio.slides.themes import get_theme_ids
+                    valid_ids = set(get_theme_ids())
+                    if raw_theme_id.strip() in valid_ids:
+                        recommended_theme_id = raw_theme_id.strip()
+                        logger.info("LLM recommended base theme: %s", recommended_theme_id)
 
-            # Extract and create custom theme from LLM style spec
-            custom_style = parsed.get("custom_style")
-            if custom_style and isinstance(custom_style, dict):
-                try:
-                    from core.studio.slides.themes import create_custom_theme, register_custom_theme
-                    custom_theme = create_custom_theme(
-                        name=custom_style.get("name", "Custom Theme"),
-                        colors=custom_style.get("colors", {}),
-                        font_style=custom_style.get("font_style", "modern"),
-                        background_style=custom_style.get("background_style", "solid"),
-                        recommended_base_id=recommended_theme_id or "corporate-blue",
-                    )
-                    # Only use custom theme if it wasn't a fallback to base
-                    if custom_theme.id.startswith("custom-"):
-                        register_custom_theme(custom_theme)
-                        custom_theme_dict = custom_theme.model_dump(mode="json")
-                        recommended_theme_id = custom_theme.id
-                        logger.info("Created custom theme: %s (%s)", custom_theme.id, custom_theme.name)
-                    else:
-                        logger.info("Custom theme fell back to base: %s", custom_theme.id)
-                        recommended_theme_id = custom_theme.id
-                except Exception as e:
-                    logger.warning("Custom theme creation failed: %s", e)
+                # Extract and create custom theme from LLM style spec
+                custom_style = parsed.get("custom_style")
+                if custom_style and isinstance(custom_style, dict):
+                    try:
+                        from core.studio.slides.themes import create_custom_theme, register_custom_theme
+                        custom_theme = create_custom_theme(
+                            name=custom_style.get("name", "Custom Theme"),
+                            colors=custom_style.get("colors", {}),
+                            font_style=custom_style.get("font_style", "modern"),
+                            background_style=custom_style.get("background_style", "solid"),
+                            recommended_base_id=recommended_theme_id or "corporate-blue",
+                        )
+                        # Only use custom theme if it wasn't a fallback to base
+                        if custom_theme.id.startswith("custom-"):
+                            register_custom_theme(custom_theme)
+                            custom_theme_dict = custom_theme.model_dump(mode="json")
+                            recommended_theme_id = custom_theme.id
+                            logger.info("Created custom theme: %s (%s)", custom_theme.id, custom_theme.name)
+                        else:
+                            logger.info("Custom theme fell back to base: %s", custom_theme.id)
+                            recommended_theme_id = custom_theme.id
+                    except Exception as e:
+                        logger.warning("Custom theme creation failed: %s", e)
 
         # Document-specific outline normalization
         if artifact_type == ArtifactType.document:
@@ -136,6 +140,7 @@ class ForgeOrchestrator:
             updated_at=now,
             model=model,
             creation_prompt=prompt.strip() or None,
+            slide_mode=slide_mode if artifact_type == ArtifactType.slides else None,
             outline=outline,
             content_tree=None,
             theme_id=recommended_theme_id,
@@ -184,6 +189,7 @@ class ForgeOrchestrator:
         artifact.outline.status = OutlineStatus.approved
 
         # Generate draft via LLM (slides-specific: inject sequence hints)
+        _slide_mode = artifact.slide_mode  # None for non-slides or artistic (default)
         if artifact.type == ArtifactType.slides:
             from core.studio.slides.generator import (
                 clamp_slide_count,
@@ -198,6 +204,7 @@ class ForgeOrchestrator:
             llm_prompt = get_draft_prompt_with_sequence(
                 artifact.type, artifact.outline, sequence,
                 creation_prompt=artifact.creation_prompt,
+                slide_mode=_slide_mode,
             )
         else:
             llm_prompt = get_draft_prompt(artifact.type, artifact.outline, creation_prompt=artifact.creation_prompt)
@@ -478,20 +485,31 @@ class ForgeOrchestrator:
             from core.schemas.studio_schema import SlidesContentTree
             from core.studio.slides.images import generate_slide_images, resolve_html_images
 
-            # 1. Resolve HTML image placeholders (mutates content_tree_dict in place)
-            html_updated = await resolve_html_images(content_tree_dict)
-            if html_updated:
-                # Persist updated content tree with resolved image URLs
-                if self._image_gen_version.get(artifact_id, 0) == version:
-                    artifact = self.storage.load_artifact(artifact_id)
-                    if artifact is not None:
-                        artifact.content_tree = content_tree_dict
-                        self.storage.save_artifact(artifact)
-                        logger.info("Saved resolved HTML images for artifact %s", artifact_id)
+            # Determine mode from the artifact
+            artifact = self.storage.load_artifact(artifact_id)
+            _slide_mode = artifact.slide_mode if artifact else None
+            is_business = _slide_mode == "business"
 
-            # 2. Generate structured element images (for PPTX export)
-            content_tree = SlidesContentTree(**content_tree_dict)
-            images = await generate_slide_images(content_tree)
+            if is_business:
+                # Business mode: AI-generated images for structured slides (PPTX)
+                content_tree = SlidesContentTree(**content_tree_dict)
+                images = await generate_slide_images(content_tree)
+            else:
+                # Artistic mode: resolve HTML image placeholders via web search
+                # 1. Resolve HTML image placeholders (mutates content_tree_dict in place)
+                html_updated = await resolve_html_images(content_tree_dict)
+                if html_updated:
+                    # Persist updated content tree with resolved image URLs
+                    if self._image_gen_version.get(artifact_id, 0) == version:
+                        artifact = self.storage.load_artifact(artifact_id)
+                        if artifact is not None:
+                            artifact.content_tree = content_tree_dict
+                            self.storage.save_artifact(artifact)
+                            logger.info("Saved resolved HTML images for artifact %s", artifact_id)
+
+                # 2. Skip structured image generation for HTML slides
+                content_tree = SlidesContentTree(**content_tree_dict)
+                images = {}
 
             # Skip writes if a newer generation was started (edit during generation)
             if self._image_gen_version.get(artifact_id, 0) != version:
