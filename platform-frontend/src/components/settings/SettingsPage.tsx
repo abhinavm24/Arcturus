@@ -64,7 +64,11 @@ interface SettingsData {
         enforce_local_verifier?: boolean;
     };
     remme: { extraction_prompt: string };
-    gemini: { api_key_env: string };
+    gemini: {
+        mode: 'api_key' | 'vertex_ai';
+        api_key_env: string;
+        vertex_ai: { project: string; location: string };
+    };
 }
 
 interface ApiKeyDef {
@@ -127,7 +131,13 @@ export const SettingsPage: React.FC = () => {
     const [prompts, setPrompts] = useState<Prompt[]>([]);
     const [selectedPrompt, setSelectedPrompt] = useState<Prompt | null>(null);
     const [promptContent, setPromptContent] = useState('');
-    const [geminiStatus, setGeminiStatus] = useState<{ configured: boolean; key_preview: string | null } | null>(null);
+    const [geminiStatus, setGeminiStatus] = useState<{
+        configured: boolean;
+        mode: string;
+        api_key_preview: string | null;
+        vertex_project: string | null;
+        vertex_location: string;
+    } | null>(null);
 
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -436,27 +446,57 @@ export const SettingsPage: React.FC = () => {
                 onChange={(v) => updateSetting('models', 'memory_extraction', v)}
             />
 
-            {/* Gemini Status */}
-            <div className="p-4 rounded-lg border border-border bg-muted/20 mt-6">
-                <div className="flex items-center gap-2">
-                    {geminiStatus?.configured ? (
-                        <Check className="w-4 h-4 text-green-500" />
-                    ) : (
-                        <X className="w-4 h-4 text-red-500" />
-                    )}
-                    <span className="text-sm font-medium">
-                        Gemini API Key: {geminiStatus?.configured ? 'Configured' : 'Not configured'}
-                    </span>
-                    {geminiStatus?.key_preview && (
-                        <span className="text-xs text-muted-foreground font-mono">({geminiStatus.key_preview})</span>
-                    )}
+            {/* Gemini Mode & Status */}
+            <SettingGroup title="Gemini Provider" description="Choose between API key (Developer API) or Vertex AI (Google Cloud)">
+                <div className="space-y-3">
+                    <select
+                        value={settings?.gemini?.mode || 'api_key'}
+                        onChange={(e) => {
+                            if (!settings) return;
+                            const mode = e.target.value as 'api_key' | 'vertex_ai';
+                            setSettings({
+                                ...settings,
+                                gemini: { ...settings.gemini, mode },
+                            });
+                            setHasChanges(true);
+                        }}
+                        className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm"
+                    >
+                        <option value="api_key">Gemini Developer API (API Key)</option>
+                        <option value="vertex_ai">Vertex AI (Google Cloud Project)</option>
+                    </select>
+
+                    <div className="p-3 rounded-lg border border-border bg-muted/10">
+                        <div className="flex items-center gap-2">
+                            {geminiStatus?.configured ? (
+                                <Check className="w-4 h-4 text-green-500" />
+                            ) : (
+                                <X className="w-4 h-4 text-red-500" />
+                            )}
+                            <span className="text-sm font-medium">
+                                {geminiStatus?.configured ? 'Connected' : 'Not configured'}
+                            </span>
+                        </div>
+                        {(settings?.gemini?.mode || 'api_key') === 'api_key' ? (
+                            <div className="mt-2 text-xs text-muted-foreground space-y-1">
+                                {geminiStatus?.api_key_preview ? (
+                                    <p>API Key: <span className="font-mono">{geminiStatus.api_key_preview}</span></p>
+                                ) : (
+                                    <p>Set <span className="font-mono">GEMINI_API_KEY</span> in the API Keys tab or as an environment variable.</p>
+                                )}
+                            </div>
+                        ) : (
+                            <div className="mt-2 text-xs text-muted-foreground space-y-1">
+                                {geminiStatus?.vertex_project ? (
+                                    <p>Project: <span className="font-mono">{geminiStatus.vertex_project}</span> ({geminiStatus?.vertex_location || 'us-central1'})</p>
+                                ) : (
+                                    <p>Set <span className="font-mono">GOOGLE_CLOUD_PROJECT</span> in the API Keys tab and run <span className="font-mono">gcloud auth application-default login</span>.</p>
+                                )}
+                            </div>
+                        )}
+                    </div>
                 </div>
-                {!geminiStatus?.configured && (
-                    <p className="text-xs text-muted-foreground mt-2">
-                        Set GEMINI_API_KEY environment variable and restart the server.
-                    </p>
-                )}
-            </div>
+            </SettingGroup>
 
             <SettingGroup title="Insights Provider" description="Choose Ollama (local) or Gemini (cloud) for document insights">
                 <select

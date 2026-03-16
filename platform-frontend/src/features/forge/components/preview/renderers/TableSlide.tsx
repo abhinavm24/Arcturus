@@ -1,7 +1,7 @@
 import type { SlideTheme } from './SlideFrame';
 import type { Slide } from '../normalizers';
 import { findElement, normalizeTableData } from '../normalizers';
-import { KickerElement, TakeawayElement, TableElement } from './elements';
+import { KickerElement, BodyElement, TakeawayElement, TableElement } from './elements';
 
 interface Props {
   slide: Slide;
@@ -11,6 +11,7 @@ interface Props {
 
 export function TableSlide({ slide, theme, isThumb }: Props) {
   const kickerEl = findElement(slide, 'kicker');
+  const bodyEl = findElement(slide, 'body');
   const tableEl = findElement(slide, 'table_data');
   const sourceEl = findElement(slide, 'source_citation');
   const takeawayEl = findElement(slide, 'takeaway');
@@ -44,6 +45,11 @@ export function TableSlide({ slide, theme, isThumb }: Props) {
           theme={theme}
           isThumb={isThumb}
         />
+        {bodyEl?.content && typeof bodyEl.content === 'string' && (
+          <div className={isThumb ? 'mt-0.5' : 'mt-3'}>
+            <BodyElement content={bodyEl.content} theme={theme} isThumb={isThumb} />
+          </div>
+        )}
       </div>
 
       {takeawayEl?.content && (

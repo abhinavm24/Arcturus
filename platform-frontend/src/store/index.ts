@@ -443,7 +443,7 @@ interface StudioSlice {
     loadArtifact: (id: string) => Promise<void>;
     createArtifact: (type: 'slides' | 'documents' | 'sheets', prompt: string, title?: string) => Promise<void>;
     approveError: string | null;
-    approveOutline: (id: string) => Promise<void>;
+    approveOutline: (id: string, modifications?: Record<string, any>) => Promise<void>;
     rejectOutline: (id: string) => Promise<void>;
     setActiveArtifactId: (id: string | null) => void;
     setIsStudioModalOpen: (open: boolean) => void;
@@ -470,6 +470,7 @@ interface StudioSlice {
     editError: string | null;
     editConflict: boolean;
     applyEditInstruction: (artifactId: string, instruction: string, baseRevisionId?: string) => Promise<void>;
+    patchSlideContent: (artifactId: string, slides: Record<number, Record<string, string>>, baseRevisionId?: string) => Promise<void>;
     clearEditState: () => void;
 }
 
@@ -2380,10 +2381,10 @@ export const useAppStore = create<AppState>()(
                     set({ isGenerating: false });
                 }
             },
-            approveOutline: async (id) => {
+            approveOutline: async (id, modifications) => {
                 set({ isApproving: true, approveError: null });
                 try {
-                    const data = await api.approveOutline(id, true);
+                    const data = await api.approveOutline(id, true, modifications);
                     set({ activeArtifact: data, activeArtifactId: data.id });
                     await get().fetchArtifacts();
                 } catch (e: any) {
@@ -2535,6 +2536,23 @@ export const useAppStore = create<AppState>()(
                     } else {
                         const detail = e?.response?.data?.detail;
                         const msg = typeof detail === 'string' ? detail : (e?.message || 'Edit failed');
+                        set({ editError: msg, editLoading: false });
+                    }
+                }
+            },
+            patchSlideContent: async (artifactId: string, slides: Record<number, Record<string, string>>, baseRevisionId?: string) => {
+                set({ editLoading: true, editError: null, editConflict: false });
+                try {
+                    const result = await api.patchSlideContent(artifactId, slides, baseRevisionId);
+                    set({ activeArtifact: result, editLoading: false });
+                    get().fetchArtifacts?.();
+                } catch (e: any) {
+                    const status = e?.response?.status;
+                    if (status === 409) {
+                        set({ editConflict: true, editLoading: false });
+                    } else {
+                        const detail = e?.response?.data?.detail;
+                        const msg = typeof detail === 'string' ? detail : (e?.message || 'Patch failed');
                         set({ editError: msg, editLoading: false });
                     }
                 }

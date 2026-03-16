@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Dialog, DialogClose, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { X, Loader2, AlertCircle } from 'lucide-react';
+import { X, Loader2, AlertCircle, Maximize2, Minimize2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useAppStore } from '@/store';
 import { api, API_BASE } from '@/lib/api';
 import { SlideFilmstrip } from './SlideFilmstrip';
@@ -26,6 +26,15 @@ const DEFAULT_THEME: SlideTheme = {
   },
   font_heading: 'Calibri',
   font_body: 'Corbel',
+};
+
+type NavDirection = 'right' | 'left' | 'down' | 'up';
+
+const DIRECTION_ANIMATION: Record<NavDirection, string> = {
+  right: 'animate-slide-from-right',
+  left: 'animate-slide-from-left',
+  down: 'animate-slide-from-bottom',
+  up: 'animate-slide-from-top',
 };
 
 /**
@@ -60,6 +69,9 @@ function SlidePreviewContent() {
 
   const [currentSlideIndex, setCurrentSlideIndex] = useState(0);
   const [selectedThemeId, setSelectedThemeId] = useState<string>(initialTheme);
+  const [navDirection, setNavDirection] = useState<NavDirection>('right');
+  const [slideKey, setSlideKey] = useState(0);
+  const [slideshowMode, setSlideshowMode] = useState(false);
 
   // Resolve theme object from ID
   const theme: SlideTheme = useMemo(() => {
@@ -75,7 +87,6 @@ function SlidePreviewContent() {
 
   // Poll for available slide images (background generation may still be running)
   const [availableImageIds, setAvailableImageIds] = useState<ReadonlySet<string>>(new Set());
-  // Match server logic: only count slides that have an image element with string prompt content
   const expectedImageSlides = useMemo(() => {
     return slides.filter(s =>
       (s.slide_type === 'image_text' || s.slide_type === 'image_full')
@@ -83,13 +94,10 @@ function SlidePreviewContent() {
     ).length;
   }, [slides]);
 
-  // revision_head_id changes on every edit → restarts polling after backend cache invalidation
   const revisionHeadId = activeArtifact?.revision_head_id;
 
   useEffect(() => {
-    // Always clear stale IDs when deps change (handles edit-away-all-images case)
     setAvailableImageIds(new Set());
-
     if (!activeArtifact?.id || expectedImageSlides === 0) return;
 
     let cancelled = false;
@@ -102,7 +110,6 @@ function SlidePreviewContent() {
             return new Set(ids);
           });
         }
-        // Stop polling once all expected images are available
         if (ids.length >= expectedImageSlides) return;
       } catch { /* ignore errors during polling */ }
       if (!cancelled) pollTimer = setTimeout(poll, 4000);
@@ -113,47 +120,82 @@ function SlidePreviewContent() {
     return () => { cancelled = true; clearTimeout(pollTimer); };
   }, [activeArtifact?.id, expectedImageSlides, revisionHeadId]);
 
+  // Navigate with direction tracking
+  const navigateTo = useCallback((index: number, direction: NavDirection) => {
+    setNavDirection(direction);
+    setCurrentSlideIndex(index);
+    setSlideKey(k => k + 1);
+  }, []);
+
   // Keyboard navigation
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     const tag = (e.target as HTMLElement)?.tagName;
     if (tag === 'TEXTAREA' || tag === 'INPUT') return;
 
     if (e.key === 'ArrowLeft') {
-      setCurrentSlideIndex(i => Math.max(0, i - 1));
-    } else if (e.key === 'ArrowRight') {
-      setCurrentSlideIndex(i => Math.min(slides.length - 1, i + 1));
+      setCurrentSlideIndex(i => {
+        const next = Math.max(0, i - 1);
+        if (next !== i) { setNavDirection('left'); setSlideKey(k => k + 1); }
+        return next;
+      });
+    } else if (e.key === 'ArrowRight' || e.key === ' ') {
+      if (e.key === ' ') e.preventDefault();
+      setCurrentSlideIndex(i => {
+        const next = Math.min(slides.length - 1, i + 1);
+        if (next !== i) { setNavDirection('right'); setSlideKey(k => k + 1); }
+        return next;
+      });
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setCurrentSlideIndex(i => {
+        const next = Math.max(0, i - 1);
+        if (next !== i) { setNavDirection('up'); setSlideKey(k => k + 1); }
+        return next;
+      });
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setCurrentSlideIndex(i => {
+        const next = Math.min(slides.length - 1, i + 1);
+        if (next !== i) { setNavDirection('down'); setSlideKey(k => k + 1); }
+        return next;
+      });
+    } else if (e.key === 'f' || e.key === 'F') {
+      setSlideshowMode(m => !m);
+    } else if (e.key === 'Escape' && slideshowMode) {
+      e.preventDefault();
+      e.stopPropagation();
+      setSlideshowMode(false);
     }
-  }, [slides.length]);
+  }, [slides.length, slideshowMode]);
 
   useEffect(() => {
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
   }, [handleKeyDown]);
 
-  // Clamp index when slides change (e.g. after edit removes a slide)
+  // Clamp index when slides change
   const clampedIndex = slides.length > 0
     ? Math.min(currentSlideIndex, slides.length - 1)
     : 0;
 
-  // Show loading/empty state instead of blank modal
+  // Show loading/empty state
   if (!activeArtifact || slides.length === 0) {
     return (
       <>
         <DialogTitle className="sr-only">Slide Preview</DialogTitle>
-        <div className="h-12 border-b border-border/30 flex items-center px-5 shrink-0">
-          <span className="text-base font-semibold text-foreground tracking-tight">
+        <div className="h-14 border-b border-white/[0.06] flex items-center px-6 shrink-0 bg-[#0a0b0d]">
+          <span className="text-sm font-semibold text-white/90 tracking-tight">
             Slide Preview
           </span>
           <div className="ml-auto">
             <DialogClose asChild>
-              <Button variant="ghost" size="sm" className="gap-1.5 text-foreground hover:text-foreground hover:bg-muted/40">
-                <X className="w-3.5 h-3.5" />
-                Close
+              <Button variant="ghost" size="sm" className="gap-1.5 text-white/60 hover:text-white hover:bg-white/[0.06]">
+                <X className="w-4 h-4" />
               </Button>
             </DialogClose>
           </div>
         </div>
-        <div className="flex-1 flex flex-col items-center justify-center gap-3 text-muted-foreground">
+        <div className="flex-1 flex flex-col items-center justify-center gap-3 text-white/40 bg-[#0d0e11]">
           {!refreshed ? (
             <>
               <Loader2 className="w-6 h-6 animate-spin" />
@@ -171,27 +213,105 @@ function SlidePreviewContent() {
   }
 
   const activeSlide = slides[clampedIndex] || slides[0];
+  const animClass = DIRECTION_ANIMATION[navDirection];
 
+  // ─── SLIDESHOW (FULLSCREEN) MODE ───
+  if (slideshowMode) {
+    return (
+      <>
+        <DialogTitle className="sr-only">Slideshow</DialogTitle>
+        <div className="fixed inset-0 z-[100] bg-black flex items-center justify-center cursor-none group"
+          onClick={() => {
+            setCurrentSlideIndex(i => {
+              const next = Math.min(slides.length - 1, i + 1);
+              if (next !== i) { setNavDirection('right'); setSlideKey(k => k + 1); }
+              return next;
+            });
+          }}
+        >
+          {/* Slide */}
+          <div
+            key={`ss-${slideKey}`}
+            className={`w-full max-w-[90vw] max-h-[90vh] aspect-[16/9] ${animClass}`}
+          >
+            <SlideRenderer
+              slide={activeSlide}
+              theme={theme}
+              slideIndex={clampedIndex}
+              totalSlides={slides.length}
+              imageBaseUrl={imageBaseUrl}
+              availableImageIds={availableImageIds}
+            />
+          </div>
+
+          {/* Hover controls */}
+          <div className="absolute bottom-0 left-0 right-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+            <div className="flex items-center justify-center gap-4 pb-8">
+              <button
+                onClick={e => { e.stopPropagation(); navigateTo(Math.max(0, clampedIndex - 1), 'left'); }}
+                disabled={clampedIndex === 0}
+                className="p-2 rounded-full bg-white/10 backdrop-blur-sm text-white/80 hover:bg-white/20 hover:text-white disabled:opacity-30 transition-all"
+              >
+                <ChevronLeft className="w-5 h-5" />
+              </button>
+              <span className="text-white/60 text-sm font-mono min-w-[60px] text-center tabular-nums">
+                {clampedIndex + 1} / {slides.length}
+              </span>
+              <button
+                onClick={e => { e.stopPropagation(); navigateTo(Math.min(slides.length - 1, clampedIndex + 1), 'right'); }}
+                disabled={clampedIndex >= slides.length - 1}
+                className="p-2 rounded-full bg-white/10 backdrop-blur-sm text-white/80 hover:bg-white/20 hover:text-white disabled:opacity-30 transition-all"
+              >
+                <ChevronRight className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Exit hint */}
+          <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+            <button
+              onClick={e => { e.stopPropagation(); setSlideshowMode(false); }}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/10 backdrop-blur-sm text-white/70 text-xs hover:bg-white/20 hover:text-white transition-all"
+            >
+              <Minimize2 className="w-3.5 h-3.5" />
+              Exit
+              <kbd className="ml-1 px-1.5 py-0.5 rounded bg-white/10 text-[10px] font-mono">Esc</kbd>
+            </button>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  // ─── NORMAL PREVIEW MODE ───
   return (
     <>
       <DialogTitle className="sr-only">Slide Preview</DialogTitle>
 
-      {/* Header */}
-      <div className="h-12 border-b border-border/30 flex items-center px-5 shrink-0">
-        <span className="text-base font-semibold text-foreground tracking-tight">
-          Slide Preview
-        </span>
-        <span className="text-sm text-muted-foreground ml-3 truncate max-w-[400px]">
-          — {activeArtifact.title}
-        </span>
-        <div className="ml-auto flex items-center gap-2">
+      {/* Header — sleek dark gradient */}
+      <div className="h-14 border-b border-white/[0.06] flex items-center px-6 shrink-0 bg-[#0a0b0d]">
+        <div className="flex items-center gap-3 min-w-0">
+          <span className="text-sm font-semibold text-white/90 tracking-tight shrink-0">
+            Slide Preview
+          </span>
+          <span className="text-xs text-white/30 truncate max-w-[300px]">
+            {activeArtifact.title}
+          </span>
+        </div>
+        <div className="ml-auto flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setSlideshowMode(true)}
+            className="gap-1.5 h-8 text-white/50 hover:text-white hover:bg-white/[0.06] text-xs"
+            title="Slideshow mode (F)"
+          >
+            <Maximize2 className="w-3.5 h-3.5" />
+            Slideshow
+          </Button>
           <DialogClose asChild>
-            <Button variant="ghost" size="sm" className="gap-1.5 text-foreground hover:text-foreground hover:bg-muted/40">
-              <X className="w-3.5 h-3.5" />
-              Close Preview
-              <kbd className="ml-1 pointer-events-none hidden h-5 select-none items-center rounded border border-border/40 bg-muted/50 px-1.5 font-mono text-[10px] font-medium text-muted-foreground sm:inline-flex">
-                Esc
-              </kbd>
+            <Button variant="ghost" size="icon" className="h-8 w-8 text-white/40 hover:text-white hover:bg-white/[0.06]">
+              <X className="w-4 h-4" />
             </Button>
           </DialogClose>
         </div>
@@ -204,25 +324,59 @@ function SlidePreviewContent() {
           slides={slides}
           theme={theme}
           currentIndex={clampedIndex}
-          onSelect={setCurrentSlideIndex}
+          onSelect={(i) => navigateTo(i, i > clampedIndex ? 'right' : 'left')}
           imageBaseUrl={imageBaseUrl}
           availableImageIds={availableImageIds}
         />
 
         {/* Center: Main Preview */}
-        <div className="flex-1 flex items-center justify-center p-10 bg-charcoal-950/30 min-w-0">
-          <div
-            key={clampedIndex}
-            className="w-full max-w-4xl animate-slide-fade-in"
+        <div className="flex-1 flex items-center justify-center min-w-0 relative"
+          style={{
+            background: 'radial-gradient(ellipse at center, #141519 0%, #0a0b0d 70%)',
+          }}
+        >
+          {/* Subtle grid pattern */}
+          <div className="absolute inset-0 opacity-[0.03]"
+            style={{
+              backgroundImage: 'radial-gradient(circle, rgba(255,255,255,0.4) 1px, transparent 1px)',
+              backgroundSize: '24px 24px',
+            }}
+          />
+
+          {/* Navigation arrows */}
+          <button
+            onClick={() => navigateTo(Math.max(0, clampedIndex - 1), 'left')}
+            disabled={clampedIndex === 0}
+            className="absolute left-4 z-10 p-2 rounded-full bg-white/[0.04] border border-white/[0.06] text-white/30 hover:bg-white/[0.08] hover:text-white/60 disabled:opacity-0 transition-all duration-200"
           >
-            <SlideRenderer
-              slide={activeSlide}
-              theme={theme}
-              slideIndex={clampedIndex}
-              totalSlides={slides.length}
-              imageBaseUrl={imageBaseUrl}
-              availableImageIds={availableImageIds}
-            />
+            <ChevronLeft className="w-5 h-5" />
+          </button>
+          <button
+            onClick={() => navigateTo(Math.min(slides.length - 1, clampedIndex + 1), 'right')}
+            disabled={clampedIndex >= slides.length - 1}
+            className="absolute right-4 z-10 p-2 rounded-full bg-white/[0.04] border border-white/[0.06] text-white/30 hover:bg-white/[0.08] hover:text-white/60 disabled:opacity-0 transition-all duration-200"
+          >
+            <ChevronRight className="w-5 h-5" />
+          </button>
+
+          {/* Slide with directional animation */}
+          <div className="px-16 py-8 w-full flex items-center justify-center relative z-[1]">
+            <div
+              key={slideKey}
+              className={`w-full max-w-4xl ${animClass}`}
+              style={{
+                filter: 'drop-shadow(0 20px 40px rgba(0,0,0,0.4)) drop-shadow(0 4px 12px rgba(0,0,0,0.3))',
+              }}
+            >
+              <SlideRenderer
+                slide={activeSlide}
+                theme={theme}
+                slideIndex={clampedIndex}
+                totalSlides={slides.length}
+                imageBaseUrl={imageBaseUrl}
+                availableImageIds={availableImageIds}
+              />
+            </div>
           </div>
         </div>
 
@@ -243,7 +397,7 @@ function SlidePreviewContent() {
         totalSlides={slides.length}
         selectedThemeId={selectedThemeId}
         onThemeChange={setSelectedThemeId}
-        onNavigate={setCurrentSlideIndex}
+        onNavigate={(i) => navigateTo(i, i > clampedIndex ? 'right' : 'left')}
       />
     </>
   );
@@ -269,7 +423,7 @@ export function SlidePreviewModal({ open, onClose }: { open: boolean; onClose: (
       <DialogContent
         hideCloseButton
         noDefaultAnimation
-        className="fixed inset-4 max-w-none translate-x-0 translate-y-0 left-0 top-0 flex flex-col bg-charcoal-900 rounded-xl border-border/30 overflow-hidden p-0 animate-modal-scale-in"
+        className="fixed inset-0 sm:inset-3 max-w-none translate-x-0 translate-y-0 left-0 top-0 flex flex-col bg-[#0d0e11] rounded-none sm:rounded-xl border-0 sm:border sm:border-white/[0.06] overflow-hidden p-0 animate-modal-scale-in shadow-2xl"
       >
         <SlidePreviewContent key={openCount} />
       </DialogContent>

@@ -327,6 +327,14 @@ export const api = {
         return res.data;
     },
 
+    patchSlideContent: async (artifactId: string, slides: Record<number, Record<string, string>>, baseRevisionId?: string): Promise<any> => {
+        const res = await axios.patch(`${API_BASE}/studio/${artifactId}/content`, {
+            slides,
+            base_revision_id: baseRevisionId,
+        });
+        return res.data;
+    },
+
     analyzeSheetUpload: async (artifactId: string, file: File): Promise<any> => {
         const formData = new FormData();
         formData.append('file', file);

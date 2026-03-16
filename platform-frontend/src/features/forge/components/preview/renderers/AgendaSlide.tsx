@@ -1,7 +1,7 @@
 import type { SlideTheme } from './SlideFrame';
 import type { Slide } from '../normalizers';
 import { findElement, normalizeAgendaItems } from '../normalizers';
-import { KickerElement } from './elements';
+import { KickerElement, BodyElement } from './elements';
 
 interface Props {
   slide: Slide;
@@ -11,6 +11,7 @@ interface Props {
 
 export function AgendaSlide({ slide, theme, isThumb }: Props) {
   const kickerEl = findElement(slide, 'kicker');
+  const bodyEl = findElement(slide, 'body');
   const bulletEl = findElement(slide, 'bullet_list');
 
   const items = bulletEl?.content && Array.isArray(bulletEl.content) ? bulletEl.content : [];
@@ -33,6 +34,12 @@ export function AgendaSlide({ slide, theme, isThumb }: Props) {
           }}
         >
           {slide.title}
+        </div>
+      )}
+
+      {bodyEl?.content && typeof bodyEl.content === 'string' && (
+        <div className={isThumb ? 'mb-0.5' : 'mb-3'}>
+          <BodyElement content={bodyEl.content} theme={theme} isThumb={isThumb} />
         </div>
       )}
 

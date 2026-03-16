@@ -1,11 +1,11 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
     Hammer, Plus, RefreshCw, CheckCircle, XCircle, ChevronRight, ChevronDown,
     History, FileText, Presentation, Table2, Loader2, AlertCircle,
-    Send, AlertTriangle, Eye, Trash2, RotateCcw
+    Send, AlertTriangle, Eye, Trash2, RotateCcw, Pencil, Palette, Maximize2
 } from 'lucide-react';
 import { useAppStore } from '@/store';
-import { api } from '@/lib/api';
+import { api, API_BASE } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -16,7 +16,31 @@ import { cn } from '@/lib/utils';
 import { formatDistanceToNow } from 'date-fns';
 import { ExportPanel } from './ExportPanel';
 import { SlidePreviewModal } from './preview/SlidePreviewModal';
+import { SlideRenderer } from './preview/SlideRenderer';
 import { ArtifactPromptBanner } from './ArtifactPromptBanner';
+import type { SlideTheme } from './preview/renderers';
+import type { Slide } from './preview/normalizers';
+
+/** Default theme used when no theme info is available */
+const DEFAULT_THEME: SlideTheme = {
+    id: 'corporate-blue',
+    name: 'Corporate Blue',
+    colors: {
+        primary: '#1E3A5F',
+        secondary: '#4A7FB5',
+        accent: '#A87A22',
+        background: '#F5F6F8',
+        text: '#1C2D3F',
+        text_light: '#7B8FA3',
+        title_background: '#152C47',
+    },
+    font_heading: 'Calibri',
+    font_body: 'Corbel',
+};
+
+/** Slide render dimensions (SlideFrame uses aspect-[16/9] so 960×540 is the canonical size) */
+const SLIDE_W = 960;
+const SLIDE_H = 540;
 
 // --- Type helpers ---
 
@@ -81,26 +105,369 @@ function JsonTree({ data, depth = 0 }: { data: unknown; depth?: number }) {
     );
 }
 
-// --- Outline tree viewer ---
+// --- Editable Outline tree viewer ---
 
-function OutlineTree({ items }: { items: any[] }) {
+interface OutlineEdit {
+    title?: string;
+    description?: string;
+}
+
+/** Flatten outline items to get a global index for each item (for slide mapping). */
+function flattenOutlineIds(items: any[]): string[] {
+    const flat: string[] = [];
+    const walk = (list: any[]) => {
+        for (const item of list) {
+            flat.push(item.id);
+            if (item.children?.length) walk(item.children);
+        }
+    };
+    walk(items);
+    return flat;
+}
+
+function EditableOutlineTree({
+    items,
+    edits,
+    onEdit,
+    editable,
+    slides,
+    theme,
+    artifact,
+    depth = 0,
+}: {
+    items: any[];
+    edits: Record<string, OutlineEdit>;
+    onEdit: (id: string, field: 'title' | 'description', value: string) => void;
+    editable: boolean;
+    slides?: Slide[];
+    theme: SlideTheme;
+    artifact: any;
+    depth?: number;
+}) {
+    // Flatten must run before any early return (React hooks rules)
+    const flatItems = useMemo(() => flattenOutlineIds(items || []), [items]);
+
     if (!items?.length) return <span className="text-muted-foreground text-xs italic">No outline items</span>;
 
     return (
-        <div className="space-y-2">
-            {items.map((item: any) => (
-                <div key={item.id} className="border-l-2 border-primary/30 pl-3 min-w-0">
-                    <p className="text-sm font-medium text-foreground break-words">{item.title}</p>
-                    {item.description && (
-                        <p className="text-xs text-muted-foreground mt-0.5 break-words">{item.description}</p>
+        <div className="space-y-4">
+            {items.map((item: any) => {
+                const globalIdx = flatItems.indexOf(item.id);
+                const slide = slides && globalIdx >= 0 ? slides[globalIdx] : undefined;
+                const editData = edits[item.id];
+
+                return (
+                    <OutlineItemWithSlide
+                        key={item.id}
+                        item={item}
+                        editData={editData}
+                        onEdit={onEdit}
+                        editable={editable}
+                        slide={slide}
+                        slideIndex={globalIdx}
+                        totalSlides={slides?.length ?? 0}
+                        theme={theme}
+                        artifact={artifact}
+                        depth={depth}
+                    >
+                        {item.children?.length > 0 && (
+                            <div className="ml-4 mt-2">
+                                <EditableOutlineTree
+                                    items={item.children}
+                                    edits={edits}
+                                    onEdit={onEdit}
+                                    editable={editable}
+                                    slides={slides}
+                                    theme={theme}
+                                    artifact={artifact}
+                                    depth={depth + 1}
+                                />
+                            </div>
+                        )}
+                    </OutlineItemWithSlide>
+                );
+            })}
+        </div>
+    );
+}
+
+// --- Helper: extract text content from a slide element ---
+function getElementText(el: any): string {
+    if (typeof el.content === 'string') return el.content;
+    if (Array.isArray(el.content)) {
+        // Bullet lists, etc. — join items
+        return el.content.map((item: any) => (typeof item === 'string' ? item : item?.text || JSON.stringify(item))).join('\n');
+    }
+    if (typeof el.content === 'object' && el.content !== null) {
+        return JSON.stringify(el.content);
+    }
+    return '';
+}
+
+// --- Single outline item with inline slide preview + edit ---
+
+function OutlineItemWithSlide({
+    item,
+    editData,
+    onEdit,
+    editable,
+    slide,
+    slideIndex,
+    totalSlides,
+    theme,
+    artifact,
+    depth,
+    children,
+}: {
+    item: any;
+    editData?: OutlineEdit;
+    onEdit: (id: string, field: 'title' | 'description', value: string) => void;
+    editable: boolean;
+    slide?: Slide;
+    slideIndex: number;
+    totalSlides: number;
+    theme: SlideTheme;
+    artifact: any;
+    depth: number;
+    children?: React.ReactNode;
+}) {
+    const [aiEditOpen, setAiEditOpen] = useState(false);
+    const [textEditOpen, setTextEditOpen] = useState(false);
+    const [editInstruction, setEditInstruction] = useState('');
+    const [editLoading, setEditLoading] = useState(false);
+    const [directEdits, setDirectEdits] = useState<Record<string, string>>({});
+    const [savingDirect, setSavingDirect] = useState(false);
+    const applyEditInstruction = useAppStore(s => s.applyEditInstruction);
+    const patchSlideContent = useAppStore(s => s.patchSlideContent);
+    const loadArtifact = useAppStore(s => s.loadArtifact);
+
+    // Measure container for responsive slide scaling
+    const slideContainerRef = useRef<HTMLDivElement>(null);
+    const [containerWidth, setContainerWidth] = useState(0);
+    useEffect(() => {
+        const el = slideContainerRef.current;
+        if (!el) return;
+        const ro = new ResizeObserver(entries => {
+            for (const entry of entries) setContainerWidth(entry.contentRect.width);
+        });
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, []);
+    const slideScale = containerWidth > 0 ? containerWidth / SLIDE_W : 1;
+    const displayH = Math.round(SLIDE_H * slideScale);
+
+    // Reset direct edits when slide changes
+    useEffect(() => {
+        setDirectEdits({});
+    }, [slide?.id]);
+
+    const handleAiEdit = useCallback(async () => {
+        if (!editInstruction.trim() || !slide) return;
+        setEditLoading(true);
+        const prefix = `On slide ${slideIndex + 1} (${slide.slide_type}, title: '${slide.title || 'untitled'}'): `;
+        try {
+            await applyEditInstruction(artifact.id, prefix + editInstruction.trim(), artifact.revision_head_id);
+            const { editError: err, editConflict: conflict } = useAppStore.getState();
+            if (!err && !conflict) {
+                setEditInstruction('');
+                setAiEditOpen(false);
+                await loadArtifact(artifact.id);
+            }
+        } finally {
+            setEditLoading(false);
+        }
+    }, [editInstruction, slide, slideIndex, artifact, applyEditInstruction, loadArtifact]);
+
+    const handleDirectSave = useCallback(async () => {
+        if (!slide || Object.keys(directEdits).length === 0) return;
+        setSavingDirect(true);
+        try {
+            await patchSlideContent(artifact.id, { [slideIndex]: directEdits }, artifact.revision_head_id);
+            const { editError: err, editConflict: conflict } = useAppStore.getState();
+            if (!err && !conflict) {
+                setDirectEdits({});
+                setTextEditOpen(false);
+                await loadArtifact(artifact.id);
+            }
+        } finally {
+            setSavingDirect(false);
+        }
+    }, [slide, slideIndex, directEdits, artifact, patchSlideContent, loadArtifact]);
+
+    const displayTitle = editData?.title ?? item.title;
+    // Strip metadata suffixes like "slide_type: agenda" from description display
+    const rawDesc = editData?.description ?? item.description;
+    const displayDesc = rawDesc ? rawDesc.replace(/\.\s*slide_type:\s*\w+\s*$/i, '.').replace(/\s*slide_type:\s*\w+\s*$/i, '').trim() || rawDesc : rawDesc;
+
+    // Text elements for direct editing
+    const textElements = useMemo(() => {
+        if (!slide?.elements) return [];
+        return slide.elements
+            .map((el, i) => ({ idx: i, type: el.type, content: getElementText(el) }))
+            .filter(e => e.content.length > 0 && e.type !== 'image');
+    }, [slide?.elements]);
+
+    return (
+        <div className="border-l-2 border-primary/30 pl-3 min-w-0">
+            {/* Outline item header */}
+            <div className="flex items-start gap-2">
+                <span className="text-xs text-muted-foreground/60 font-mono mt-0.5 shrink-0">
+                    {slideIndex + 1}.
+                </span>
+                <div className="flex-1 min-w-0">
+                    {editable ? (
+                        <input
+                            className="w-full text-sm font-medium text-foreground bg-transparent border-b border-dashed border-border/50 focus:border-primary/60 outline-none py-0.5 break-words"
+                            value={displayTitle}
+                            onChange={e => onEdit(item.id, 'title', e.target.value)}
+                            placeholder="Slide title..."
+                        />
+                    ) : (
+                        <p className="text-sm font-medium text-foreground break-words">{displayTitle}</p>
                     )}
-                    {item.children?.length > 0 && (
-                        <div className="ml-2 mt-1">
-                            <OutlineTree items={item.children} />
-                        </div>
+                    {(editable || displayDesc) && (
+                        editable ? (
+                            <textarea
+                                className="w-full text-xs text-muted-foreground bg-transparent border-b border-dashed border-border/30 focus:border-primary/40 outline-none mt-0.5 resize-none break-words"
+                                value={displayDesc || ''}
+                                onChange={e => onEdit(item.id, 'description', e.target.value)}
+                                placeholder="Description..."
+                                rows={1}
+                            />
+                        ) : (
+                            displayDesc && <p className="text-xs text-muted-foreground mt-0.5 break-words line-clamp-2">{displayDesc}</p>
+                        )
                     )}
                 </div>
-            ))}
+                {/* Edit buttons (only when slide exists) */}
+                {slide && (
+                    <div className="flex items-center gap-1 shrink-0 mt-0.5">
+                        <button
+                            onClick={() => { setTextEditOpen(o => !o); setAiEditOpen(false); }}
+                            className={cn(
+                                "p-1.5 rounded-md transition-colors",
+                                textEditOpen
+                                    ? "bg-emerald-500/20 text-emerald-400"
+                                    : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                            )}
+                            title="Edit text directly"
+                        >
+                            <FileText className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                            onClick={() => { setAiEditOpen(o => !o); setTextEditOpen(false); }}
+                            className={cn(
+                                "p-1.5 rounded-md transition-colors",
+                                aiEditOpen
+                                    ? "bg-primary/20 text-primary"
+                                    : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                            )}
+                            title="Edit with AI prompt"
+                        >
+                            <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                    </div>
+                )}
+            </div>
+
+            {/* Inline slide preview — responsive full-width */}
+            <div ref={slideContainerRef} className="mt-2 mb-1 w-full">
+                {slide && containerWidth > 0 && (
+                    <div
+                        style={{
+                            width: '100%',
+                            height: displayH,
+                            overflow: 'hidden',
+                            position: 'relative',
+                            borderRadius: 8,
+                            border: '1px solid rgba(128,128,128,0.15)',
+                            boxShadow: '0 2px 8px rgba(0,0,0,0.12)',
+                        }}
+                    >
+                        <div
+                            style={{
+                                width: SLIDE_W,
+                                height: SLIDE_H,
+                                transform: `scale(${slideScale})`,
+                                transformOrigin: 'top left',
+                                pointerEvents: 'none',
+                            }}
+                        >
+                            <SlideRenderer
+                                slide={slide}
+                                theme={theme}
+                                slideIndex={slideIndex}
+                                totalSlides={totalSlides}
+                                imageBaseUrl={`${API_BASE}/studio/${artifact.id}/images`}
+                            />
+                        </div>
+                    </div>
+                )}
+            </div>
+
+            {/* AI prompt edit input */}
+            {aiEditOpen && slide && (
+                <div className="mt-2 mb-2 flex gap-2 items-start">
+                    <Input
+                        value={editInstruction}
+                        onChange={e => setEditInstruction(e.target.value)}
+                        placeholder="e.g. Make it more visual, add a chart..."
+                        className="text-xs h-8 flex-1"
+                        onKeyDown={e => e.key === 'Enter' && handleAiEdit()}
+                    />
+                    <Button
+                        size="sm"
+                        className="h-8 px-3 text-xs"
+                        onClick={handleAiEdit}
+                        disabled={editLoading || !editInstruction.trim()}
+                    >
+                        {editLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                    </Button>
+                </div>
+            )}
+
+            {/* Direct text editing panel */}
+            {textEditOpen && slide && (
+                <div className="mt-2 mb-2 space-y-2 rounded-lg border border-border/30 bg-muted/10 p-3">
+                    {/* Slide title */}
+                    <div>
+                        <label className="text-[10px] text-muted-foreground uppercase tracking-wider">Title</label>
+                        <input
+                            className="w-full text-xs text-foreground bg-transparent border-b border-border/50 focus:border-primary/60 outline-none py-1"
+                            value={directEdits.title ?? slide.title ?? ''}
+                            onChange={e => setDirectEdits(prev => ({ ...prev, title: e.target.value }))}
+                        />
+                    </div>
+                    {/* Text elements */}
+                    {textElements.map(el => {
+                        const key = `element_${el.idx}_content`;
+                        return (
+                            <div key={key}>
+                                <label className="text-[10px] text-muted-foreground uppercase tracking-wider">
+                                    {el.type}
+                                </label>
+                                <textarea
+                                    className="w-full text-xs text-foreground bg-transparent border border-border/30 rounded p-1.5 focus:border-primary/60 outline-none resize-none"
+                                    value={directEdits[key] ?? el.content}
+                                    onChange={e => setDirectEdits(prev => ({ ...prev, [key]: e.target.value }))}
+                                    rows={Math.min(4, el.content.split('\n').length + 1)}
+                                />
+                            </div>
+                        );
+                    })}
+                    <Button
+                        size="sm"
+                        className="h-7 px-3 text-xs w-full"
+                        onClick={handleDirectSave}
+                        disabled={savingDirect || Object.keys(directEdits).length === 0}
+                    >
+                        {savingDirect ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <CheckCircle className="w-3 h-3 mr-1" />}
+                        Save Text Changes
+                    </Button>
+                </div>
+            )}
+
+            {children}
         </div>
     );
 }
@@ -270,9 +637,58 @@ function ArtifactDetail({ artifact }: { artifact: any }) {
         }
     };
 
+    const [outlineEdits, setOutlineEdits] = useState<Record<string, OutlineEdit>>({});
+    const [themeInstruction, setThemeInstruction] = useState('');
+    const [themeLoading, setThemeLoading] = useState(false);
+
     const meta = TYPE_META[artifact.type] || TYPE_META.document;
     const Icon = meta.icon;
     const outlineStatus = artifact.outline?.status;
+
+    // Resolve theme
+    const studioThemes = useAppStore(s => s.studioThemes);
+    const resolvedTheme: SlideTheme = useMemo(() => {
+        if (artifact.theme_id && studioThemes?.length) {
+            const found = studioThemes.find((t: any) => t.id === artifact.theme_id);
+            if (found) return found;
+        }
+        return DEFAULT_THEME;
+    }, [artifact.theme_id, studioThemes]);
+
+    const slides: Slide[] = useMemo(() => {
+        return artifact.content_tree?.slides ?? [];
+    }, [artifact.content_tree?.slides]);
+
+    const handleOutlineEdit = useCallback((id: string, field: 'title' | 'description', value: string) => {
+        setOutlineEdits(prev => ({
+            ...prev,
+            [id]: { ...prev[id], [field]: value },
+        }));
+    }, []);
+
+    const handleApproveWithEdits = useCallback(async () => {
+        const modifications = Object.keys(outlineEdits).length > 0 ? { items: outlineEdits } : undefined;
+        await approveOutline(artifact.id, modifications);
+    }, [approveOutline, artifact.id, outlineEdits]);
+
+    const handleApplyTheme = useCallback(async () => {
+        if (!themeInstruction.trim()) return;
+        setThemeLoading(true);
+        try {
+            await applyEditInstruction(
+                artifact.id,
+                `Global theme change: ${themeInstruction.trim()}. Do not change slide content, only adjust colors, fonts, and styling.`,
+                artifact.revision_head_id
+            );
+            const { editError: err, editConflict: conflict } = useAppStore.getState();
+            if (!err && !conflict) {
+                setThemeInstruction('');
+                await loadArtifact(artifact.id);
+            }
+        } finally {
+            setThemeLoading(false);
+        }
+    }, [themeInstruction, artifact, applyEditInstruction, loadArtifact]);
 
     useEffect(() => {
         let cancelled = false;
@@ -317,23 +733,73 @@ function ArtifactDetail({ artifact }: { artifact: any }) {
                             </span>
                         )}
                     </div>
+                    {/* Slideshow button in header */}
+                    {artifact.type === 'slides' && artifact.content_tree && (
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setPreviewOpen(true)}
+                            className="shrink-0 gap-1.5 h-8 text-xs"
+                        >
+                            <Maximize2 className="w-3.5 h-3.5" />
+                            Slideshow
+                        </Button>
+                    )}
                 </div>
 
                 <ArtifactPromptBanner key={artifact.id} prompt={artifact.creation_prompt} />
 
+                {/* Global Theme Bar (only when content exists) */}
+                {artifact.content_tree && artifact.type === 'slides' && (
+                    <div className="rounded-lg border border-border/50 bg-muted/20 p-3">
+                        <div className="flex items-center gap-2 mb-2">
+                            <Palette className="w-4 h-4 text-primary" />
+                            <span className="text-xs font-semibold text-foreground uppercase tracking-wider">Theme</span>
+                        </div>
+                        <div className="flex gap-2">
+                            <Input
+                                value={themeInstruction}
+                                onChange={e => setThemeInstruction(e.target.value)}
+                                placeholder="Dark mode, tech style, investor deck, change fonts..."
+                                className="text-xs h-8 flex-1"
+                                onKeyDown={e => e.key === 'Enter' && handleApplyTheme()}
+                            />
+                            <Button
+                                size="sm"
+                                className="h-8 px-3 text-xs gap-1.5"
+                                onClick={handleApplyTheme}
+                                disabled={themeLoading || !themeInstruction.trim()}
+                            >
+                                {themeLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Palette className="w-3 h-3" />}
+                                Apply
+                            </Button>
+                        </div>
+                    </div>
+                )}
+
                 {/* Outline Section */}
                 {artifact.outline && (
                     <div className="space-y-3">
-                        <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider">Outline</h3>
+                        <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider">
+                            Outline {outlineStatus === 'pending' && <span className="text-xs text-primary/60 font-normal ml-1">(editable)</span>}
+                        </h3>
                         <div className="rounded-lg border border-border/50 bg-muted/20 p-4">
-                            <OutlineTree items={artifact.outline.items || []} />
+                            <EditableOutlineTree
+                                items={artifact.outline.items || []}
+                                edits={outlineEdits}
+                                onEdit={handleOutlineEdit}
+                                editable={outlineStatus === 'pending'}
+                                slides={slides.length > 0 ? slides : undefined}
+                                theme={resolvedTheme}
+                                artifact={artifact}
+                            />
                         </div>
 
                         {/* Approve / Reject */}
                         {outlineStatus === 'pending' && (
                             <div className="flex gap-2">
                                 <Button
-                                    onClick={() => approveOutline(artifact.id)}
+                                    onClick={handleApproveWithEdits}
                                     disabled={isApproving}
                                     className="flex-1 bg-green-600 hover:bg-green-700 text-white"
                                 >
@@ -342,7 +808,7 @@ function ArtifactDetail({ artifact }: { artifact: any }) {
                                     ) : (
                                         <CheckCircle className="w-4 h-4 mr-2" />
                                     )}
-                                    Approve
+                                    {Object.keys(outlineEdits).length > 0 ? 'Approve with Changes' : 'Approve & Generate'}
                                 </Button>
                                 <Button
                                     variant="outline"
