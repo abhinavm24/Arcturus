@@ -119,7 +119,8 @@ class SyncEngine:
             pass
         changes = build_push_changes(mem_deltas, space_deltas, episodic_deltas)
         req = PushRequest(user_id=self.user_id, device_id=self.device_id, changes=changes)
-        return push_changes(self.sync_server_url, req)
+        headers = {"X-User-Id": self.user_id} if self.user_id else None
+        return push_changes(self.sync_server_url, req, headers=headers)
 
     def pull(self) -> PullResponse:
         """Pull remote changes, merge (LWW), apply to local store. Returns response."""
@@ -131,7 +132,8 @@ class SyncEngine:
             device_id=self.device_id,
             since_cursor=cursor,
         )
-        resp = pull_changes(self.sync_server_url, req)
+        headers = {"X-User-Id": self.user_id} if self.user_id else None
+        resp = pull_changes(self.sync_server_url, req, headers=headers)
         if resp.changes:
             self._apply_changes(resp.changes)
         if resp.cursor:
