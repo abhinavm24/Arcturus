@@ -86,6 +86,7 @@ class Slide(BaseModel):
     elements: List[SlideElement] = Field(default_factory=list)
     speaker_notes: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
+    html: Optional[str] = None  # LLM-generated HTML for direct preview rendering
 
 
 class SlidesContentTree(BaseModel):

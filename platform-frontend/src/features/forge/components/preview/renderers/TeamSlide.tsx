@@ -37,7 +37,7 @@ export function TeamSlide({ slide, theme, isThumb }: Props) {
       )}
 
       {items.length === 0 && bodyEl?.content ? (
-        <BodyElement content={bodyEl.content} theme={theme} isThumb={isThumb} bodyColor={sc.bodyColor} accentColor={sc.accentColor} />
+        <BodyElement content={bodyEl.content} theme={theme} isThumb={isThumb} bodyColor={sc.bodyColor} bodyStyle={sc.bodyStyle} accentColor={sc.accentColor} />
       ) : (
         <div
           className={`flex-1 grid min-h-0 ${isThumb ? 'gap-0.5' : 'gap-3'}`}

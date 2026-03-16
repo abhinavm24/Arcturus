@@ -50,7 +50,7 @@ export function ChartSlide({ slide, theme, isThumb }: Props) {
 
       {bodyEl?.content && (
         <AnimatedElement animation="fade" delay={280} isThumb={isThumb}>
-          <BodyElement content={bodyEl.content} theme={theme} isThumb={isThumb} bodyColor={sc.bodyColor} accentColor={sc.accentColor} />
+          <BodyElement content={bodyEl.content} theme={theme} isThumb={isThumb} bodyColor={sc.bodyColor} bodyStyle={sc.bodyStyle} accentColor={sc.accentColor} />
         </AnimatedElement>
       )}
 

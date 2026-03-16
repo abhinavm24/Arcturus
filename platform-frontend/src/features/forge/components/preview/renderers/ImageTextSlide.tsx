@@ -68,7 +68,7 @@ export function ImageTextSlide({ slide, theme, isThumb, imageBaseUrl, availableI
         )}
         {bodyEl?.content && typeof bodyEl.content === 'string' && (
           <AnimatedElement animation="rise" delay={160} isThumb={isThumb}>
-            <BodyElement content={bodyEl.content} theme={theme} isThumb={isThumb} bodyColor={sc.bodyColor} accentColor={sc.accentColor} />
+            <BodyElement content={bodyEl.content} theme={theme} isThumb={isThumb} bodyColor={sc.bodyColor} bodyStyle={sc.bodyStyle} accentColor={sc.accentColor} />
           </AnimatedElement>
         )}
       </div>

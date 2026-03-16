@@ -50,10 +50,10 @@ export function TwoColumnSlide({ slide, theme, isThumb }: Props) {
         <AnimatedElement animation="rise" delay={160} isThumb={isThumb}>
           <div className="flex flex-col">
             {leftBody && typeof leftBody === 'string' && (
-              <BodyElement content={leftBody} theme={theme} isThumb={isThumb} bodyColor={sc.bodyColor} accentColor={sc.accentColor} />
+              <BodyElement content={leftBody} theme={theme} isThumb={isThumb} bodyColor={sc.bodyColor} bodyStyle={sc.bodyStyle} accentColor={sc.accentColor} />
             )}
             {leftBullets && Array.isArray(leftBullets) && (
-              <BulletListElement items={leftBullets} theme={theme} isThumb={isThumb} bodyColor={sc.bodyColor} accentColor={sc.accentColor} />
+              <BulletListElement items={leftBullets} theme={theme} isThumb={isThumb} bodyColor={sc.bodyColor} bodyStyle={sc.bodyStyle} accentColor={sc.accentColor} />
             )}
           </div>
         </AnimatedElement>
@@ -61,10 +61,10 @@ export function TwoColumnSlide({ slide, theme, isThumb }: Props) {
         <AnimatedElement animation="rise" delay={240} isThumb={isThumb}>
           <div className="flex flex-col">
             {rightBody && typeof rightBody === 'string' && (
-              <BodyElement content={rightBody} theme={theme} isThumb={isThumb} bodyColor={sc.bodyColor} accentColor={sc.accentColor} />
+              <BodyElement content={rightBody} theme={theme} isThumb={isThumb} bodyColor={sc.bodyColor} bodyStyle={sc.bodyStyle} accentColor={sc.accentColor} />
             )}
             {rightBullets && Array.isArray(rightBullets) && (
-              <BulletListElement items={rightBullets} theme={theme} isThumb={isThumb} bodyColor={sc.bodyColor} accentColor={sc.accentColor} />
+              <BulletListElement items={rightBullets} theme={theme} isThumb={isThumb} bodyColor={sc.bodyColor} bodyStyle={sc.bodyStyle} accentColor={sc.accentColor} />
             )}
           </div>
         </AnimatedElement>

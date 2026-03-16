@@ -51,7 +51,7 @@ export function StatSlide({ slide, theme, isThumb }: Props) {
       {bodyEl?.content && typeof bodyEl.content === 'string' && !isThumb && (
         <AnimatedElement animation="fade" delay={240} isThumb={isThumb}>
           <div className="mt-2">
-            <BodyElement content={bodyEl.content} theme={theme} bodyColor={sc.bodyColor} accentColor={sc.accentColor} />
+            <BodyElement content={bodyEl.content} theme={theme} bodyColor={sc.bodyColor} bodyStyle={sc.bodyStyle} accentColor={sc.accentColor} />
           </div>
         </AnimatedElement>
       )}

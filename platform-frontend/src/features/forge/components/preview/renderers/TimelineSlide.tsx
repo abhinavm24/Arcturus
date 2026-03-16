@@ -47,7 +47,7 @@ export function TimelineSlide({ slide, theme, isThumb }: Props) {
       {bodyEl?.content && typeof bodyEl.content === 'string' && (
         <AnimatedElement animation="rise" delay={120} isThumb={isThumb}>
           <div className={isThumb ? 'mb-0.5' : 'mb-3'}>
-            <BodyElement content={bodyEl.content} theme={theme} isThumb={isThumb} bodyColor={sc.bodyColor} accentColor={sc.accentColor} />
+            <BodyElement content={bodyEl.content} theme={theme} isThumb={isThumb} bodyColor={sc.bodyColor} bodyStyle={sc.bodyStyle} accentColor={sc.accentColor} />
           </div>
         </AnimatedElement>
       )}

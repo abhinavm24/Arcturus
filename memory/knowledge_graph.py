@@ -27,12 +27,15 @@ Enable via NEO4J_ENABLED=true and NEO4J_URI/NEO4J_USER/NEO4J_PASSWORD env vars.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from core.utils import log_error, log_step
+
+logger = logging.getLogger(__name__)
 from memory.space_constants import SPACE_ID_GLOBAL, SYNC_POLICY_SYNC, SYNC_POLICY_SHARED
 from memory.user_id import get_user_id
 
@@ -128,10 +131,10 @@ class KnowledgeGraph:
                 self._ensure_schema()
                 log_step("✅ KnowledgeGraph (Neo4j) initialized", symbol="🔧")
             except Exception as e:
-                log_error(f"Neo4j connection failed: {e}")
+                logger.debug("Neo4j connection failed (will use NetworkX fallback): %s", e)
                 self._enabled = False
         elif self._enabled and not self.password:
-            log_error("NEO4J_PASSWORD required when NEO4J_ENABLED=true")
+            logger.debug("NEO4J_PASSWORD not set — Neo4j disabled, using NetworkX fallback")
             self._enabled = False
 
     @property
@@ -2168,9 +2171,9 @@ def get_knowledge_graph():
         try:
             from memory.knowledge_graph_nx import NetworkXKnowledgeGraph
             _kg = NetworkXKnowledgeGraph()  # type: ignore[assignment]
-            log_step("KnowledgeGraph", "Using NetworkX fallback (Neo4j unreachable)")
+            logger.debug("KnowledgeGraph: Using NetworkX fallback (Neo4j unreachable)")
             return _kg
         except Exception as exc:
-            log_error("KnowledgeGraph", f"NetworkX fallback failed: {exc}")
+            logger.debug("KnowledgeGraph: NetworkX fallback failed: %s", exc)
 
     return None

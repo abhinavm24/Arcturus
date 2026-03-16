@@ -38,7 +38,7 @@ export function CodeSlide({ slide, theme, isThumb }: Props) {
 
       {bodyEl?.content && typeof bodyEl.content === 'string' && !isThumb && (
         <div className="mt-3">
-          <BodyElement content={bodyEl.content} theme={theme} isThumb={isThumb} bodyColor={sc.bodyColor} accentColor={sc.accentColor} />
+          <BodyElement content={bodyEl.content} theme={theme} isThumb={isThumb} bodyColor={sc.bodyColor} bodyStyle={sc.bodyStyle} accentColor={sc.accentColor} />
         </div>
       )}
     </div>

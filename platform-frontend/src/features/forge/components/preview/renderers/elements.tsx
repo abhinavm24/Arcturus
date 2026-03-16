@@ -82,10 +82,10 @@ export function TakeawayElement({ content, theme, isThumb, accentColor }: Elemen
 
 // ── Bullet List ─────────────────────────────────────────────────────────────
 
-export function BulletListElement({ items, theme, isThumb, accentColor, bodyColor }: ElementProps & { items: string[]; accentColor?: string; bodyColor?: string }) {
+export function BulletListElement({ items, theme, isThumb, accentColor, bodyColor, bodyStyle }: ElementProps & { items: string[]; accentColor?: string; bodyColor?: string; bodyStyle?: React.CSSProperties }) {
   if (!items?.length) return null;
   return (
-    <ul className={isThumb ? 'space-y-0 text-[3.5px] pl-2' : 'space-y-1.5 text-sm pl-1'}>
+    <ul className={isThumb ? 'space-y-0 text-[3.5px] pl-2' : 'space-y-1.5 text-sm pl-1'} style={bodyStyle}>
       {items.map((item, i) => (
         <li key={i} className="flex items-start gap-1.5">
           <span
@@ -101,12 +101,12 @@ export function BulletListElement({ items, theme, isThumb, accentColor, bodyColo
 
 // ── Body Text ───────────────────────────────────────────────────────────────
 
-export function BodyElement({ content, theme, isThumb, bodyColor }: ElementProps & { content: string; bodyColor?: string; accentColor?: string }) {
+export function BodyElement({ content, theme, isThumb, bodyColor, bodyStyle }: ElementProps & { content: string; bodyColor?: string; accentColor?: string; bodyStyle?: React.CSSProperties }) {
   if (!content) return null;
   return (
     <div
       className={isThumb ? 'text-[3.5px] leading-tight' : 'text-sm leading-relaxed whitespace-pre-wrap'}
-      style={{ color: bodyColor ?? theme.colors.text }}
+      style={{ color: bodyColor ?? theme.colors.text, ...bodyStyle }}
     >
       {content}
     </div>

@@ -195,15 +195,53 @@ class ForgeOrchestrator:
                 artifact.outline.parameters.get("slide_count") if artifact.outline.parameters else None
             )
             sequence = plan_slide_sequence(target_count, seed)
-            llm_prompt = get_draft_prompt_with_sequence(artifact.type, artifact.outline, sequence)
+            llm_prompt = get_draft_prompt_with_sequence(
+                artifact.type, artifact.outline, sequence,
+                creation_prompt=artifact.creation_prompt,
+            )
         else:
-            llm_prompt = get_draft_prompt(artifact.type, artifact.outline)
+            llm_prompt = get_draft_prompt(artifact.type, artifact.outline, creation_prompt=artifact.creation_prompt)
 
         mm = ModelManager(model_name=artifact.model) if artifact.model else ModelManager()
+
+        # Dump prompt & response to disk for debugging (slides only for now)
+        _debug_dir = None
+        if artifact.type == ArtifactType.slides:
+            import pathlib
+            _debug_dir = pathlib.Path("studio") / artifact_id / "debug"
+            _debug_dir.mkdir(parents=True, exist_ok=True)
+            (_debug_dir / "prompt.txt").write_text(llm_prompt, encoding="utf-8")
+            logger.info("Saved draft prompt to %s/prompt.txt", _debug_dir)
+
         raw = await mm.generate_text(llm_prompt)
+
+        if _debug_dir:
+            (_debug_dir / "llm_response_raw.txt").write_text(raw, encoding="utf-8")
+            logger.info(
+                "Saved raw LLM response (%d chars) to %s/llm_response_raw.txt",
+                len(raw), _debug_dir,
+            )
 
         # Parse and validate content tree
         parsed = parse_llm_json(raw)
+
+        # Slides-specific: normalize raw LLM field names before validation
+        if artifact.type == ArtifactType.slides:
+            from core.studio.slides.generator import normalize_slides_content_tree_raw
+            parsed = normalize_slides_content_tree_raw(parsed)
+
+            # Debug: log html field status
+            _slides = parsed.get("slides", [])
+            _html_count = sum(1 for s in _slides if isinstance(s, dict) and s.get("html"))
+            logger.info(
+                "Slides draft: %d slides, %d with html field", len(_slides), _html_count
+            )
+            if _html_count == 0 and len(_slides) > 0:
+                _has_html_in_raw = '"html"' in raw or "'html'" in raw
+                logger.warning(
+                    "No html fields in parsed slides. Raw contains 'html' key: %s",
+                    _has_html_in_raw,
+                )
 
         # Document-specific: normalize raw LLM field names before validation
         if artifact.type == ArtifactType.document:
@@ -431,11 +469,27 @@ class ForgeOrchestrator:
         content_tree_dict: dict,
         version: int,
     ) -> None:
-        """Background task: generate slide images via Gemini and cache to disk."""
+        """Background task: generate slide images via Gemini and cache to disk.
+
+        Also resolves HTML image placeholders (<img data-placeholder="true">)
+        for the new HTML-per-slide rendering path.
+        """
         try:
             from core.schemas.studio_schema import SlidesContentTree
-            from core.studio.slides.images import generate_slide_images
+            from core.studio.slides.images import generate_slide_images, resolve_html_images
 
+            # 1. Resolve HTML image placeholders (mutates content_tree_dict in place)
+            html_updated = await resolve_html_images(content_tree_dict)
+            if html_updated:
+                # Persist updated content tree with resolved image URLs
+                if self._image_gen_version.get(artifact_id, 0) == version:
+                    artifact = self.storage.load_artifact(artifact_id)
+                    if artifact is not None:
+                        artifact.content_tree = content_tree_dict
+                        self.storage.save_artifact(artifact)
+                        logger.info("Saved resolved HTML images for artifact %s", artifact_id)
+
+            # 2. Generate structured element images (for PPTX export)
             content_tree = SlidesContentTree(**content_tree_dict)
             images = await generate_slide_images(content_tree)
 

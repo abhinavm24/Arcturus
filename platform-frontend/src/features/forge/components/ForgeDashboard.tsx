@@ -335,7 +335,7 @@ function OutlineItemWithSlide({
                                 rows={1}
                             />
                         ) : (
-                            displayDesc && <p className="text-xs text-muted-foreground mt-0.5 break-words line-clamp-2">{displayDesc}</p>
+                            displayDesc && <p className="text-xs text-muted-foreground mt-0.5 break-words line-clamp-4">{displayDesc}</p>
                         )
                     )}
                 </div>

@@ -7,6 +7,7 @@
 import { RENDERERS, SlideFrame } from './renderers';
 import type { SlideTheme } from './renderers';
 import type { SlideStyle } from './renderers/SlideFrame';
+import { HtmlSlide } from './renderers/HtmlSlide';
 import type { Slide } from './normalizers';
 
 interface SlideRendererProps {
@@ -24,6 +25,28 @@ interface SlideRendererProps {
 const TITLE_BG_TYPES = new Set(['title', 'section_divider']);
 
 export function SlideRenderer({ slide, theme, slideIndex, totalSlides, isThumb = false, imageBaseUrl, availableImageIds }: SlideRendererProps) {
+  // HTML-first: if LLM provided full HTML, render it directly (bypass SlideFrame)
+  if (slide.html) {
+    return (
+      <div
+        className="relative w-full overflow-hidden select-none"
+        style={{ aspectRatio: '16 / 9' }}
+      >
+        <HtmlSlide html={slide.html} isThumb={isThumb} />
+        {/* Minimal slide counter for non-thumb views */}
+        {!isThumb && totalSlides > 1 && (
+          <div
+            className="absolute bottom-2 right-3 text-[10px] font-mono tabular-nums"
+            style={{ color: 'rgba(255,255,255,0.35)', zIndex: 10 }}
+          >
+            {slideIndex + 1} / {totalSlides}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Fallback: structured renderers for old slides without html field
   const Renderer = RENDERERS[slide.slide_type] ?? RENDERERS.content;
   const useTitleBg = TITLE_BG_TYPES.has(slide.slide_type);
   // Prefer new slide_style; fall back to old visual_style for backward compat

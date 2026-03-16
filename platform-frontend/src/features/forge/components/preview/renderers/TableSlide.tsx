@@ -57,7 +57,7 @@ export function TableSlide({ slide, theme, isThumb }: Props) {
         {bodyEl?.content && typeof bodyEl.content === 'string' && (
           <AnimatedElement animation="fade" delay={240} isThumb={isThumb}>
             <div className={isThumb ? 'mt-0.5' : 'mt-3'}>
-              <BodyElement content={bodyEl.content} theme={theme} isThumb={isThumb} bodyColor={sc.bodyColor} accentColor={sc.accentColor} />
+              <BodyElement content={bodyEl.content} theme={theme} isThumb={isThumb} bodyColor={sc.bodyColor} bodyStyle={sc.bodyStyle} accentColor={sc.accentColor} />
             </div>
           </AnimatedElement>
         )}

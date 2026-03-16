@@ -43,11 +43,11 @@ export function ContentSlide({ slide, theme, isThumb }: Props) {
       <div className="flex-1 min-h-0">
         <AnimatedElement animation="rise" delay={160} isThumb={isThumb}>
           {bodyEl?.content && typeof bodyEl.content === 'string' && (
-            <BodyElement content={bodyEl.content} theme={theme} isThumb={isThumb} bodyColor={sc.bodyColor} accentColor={sc.accentColor} />
+            <BodyElement content={bodyEl.content} theme={theme} isThumb={isThumb} bodyColor={sc.bodyColor} bodyStyle={sc.bodyStyle} accentColor={sc.accentColor} />
           )}
           {bulletEl?.content && Array.isArray(bulletEl.content) && (
             <div className={isThumb ? '' : 'mt-2'}>
-              <BulletListElement items={bulletEl.content} theme={theme} isThumb={isThumb} bodyColor={sc.bodyColor} accentColor={sc.accentColor} />
+              <BulletListElement items={bulletEl.content} theme={theme} isThumb={isThumb} bodyColor={sc.bodyColor} bodyStyle={sc.bodyStyle} accentColor={sc.accentColor} />
             </div>
           )}
         </AnimatedElement>

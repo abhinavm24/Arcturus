@@ -299,6 +299,9 @@ class ModelManager:
                 self.client.models.generate_content,
                 model=self.model_info["model"],
                 contents=prompt,
+                config=genai.types.GenerateContentConfig(
+                    max_output_tokens=65536,
+                ),
             )
             text = response.text.strip()
             usage = getattr(response, "usage_metadata", None)
@@ -321,6 +324,9 @@ class ModelManager:
                 self.client.models.generate_content,
                 model=self.model_info["model"],
                 contents=contents,
+                config=genai.types.GenerateContentConfig(
+                    max_output_tokens=65536,
+                ),
             )
             text = response.text.strip()
             usage = getattr(response, "usage_metadata", None)

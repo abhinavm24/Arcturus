@@ -101,14 +101,30 @@ def _get_theme_field_schema(artifact_type: ArtifactType) -> str:
     return ""
 
 
-def get_draft_prompt(artifact_type: ArtifactType, outline: Outline) -> str:
+def get_draft_prompt(artifact_type: ArtifactType, outline: Outline, creation_prompt: str | None = None) -> str:
     """Build a system prompt requesting full content_tree JSON from an approved outline."""
 
     outline_json = json.dumps(outline.model_dump(mode="json"), indent=2)
     type_schema = _get_type_specific_draft_schema(artifact_type)
 
-    return f"""You are a professional content creator. Generate a complete {artifact_type.value} based on the approved outline below.
+    # For slides: user's original prompt is THE creative brief — pass it through
+    user_intent_section = ""
+    if creation_prompt and creation_prompt.strip():
+        user_intent_section = f"""
+═══════════════════════════════════════════════════════════════════
+USER'S CREATIVE BRIEF (THIS IS YOUR PRIMARY DESIGN DIRECTION):
+═══════════════════════════════════════════════════════════════════
+{creation_prompt.strip()}
 
+You MUST honor the user's design intent above. Their visual direction, color choices, typography
+preferences, layout style, and aesthetic vision take ABSOLUTE priority over any generic defaults.
+═══════════════════════════════════════════════════════════════════
+"""
+
+    role = "world-class presentation designer and visual storyteller" if artifact_type == ArtifactType.slides else "professional content creator"
+
+    return f"""You are a {role}. Generate a complete {artifact_type.value} based on the approved outline below.
+{user_intent_section}
 Approved outline:
 {outline_json}
 
@@ -184,105 +200,137 @@ def _get_type_specific_outline_guidance(artifact_type: ArtifactType) -> str:
 def _get_type_specific_draft_schema(artifact_type: ArtifactType) -> str:
     """Return the exact JSON schema the LLM should produce for the draft."""
     if artifact_type == ArtifactType.slides:
-        return """Generate a SlidesContentTree JSON with this exact schema:
+        return """
+╔═══════════════════════════════════════════════════════════════════╗
+║  YOU ARE DESIGNING VISUAL SLIDES, NOT FILLING IN TEMPLATES.      ║
+║  The "html" field IS the slide. It is what the user SEES.        ║
+║  Every slide must be a UNIQUE visual composition.                ║
+║  If the user gave design direction, FOLLOW IT EXACTLY.           ║
+╚═══════════════════════════════════════════════════════════════════╝
+
+Generate a SlidesContentTree JSON:
 {
   "deck_title": "Presentation title",
   "subtitle": "Optional subtitle",
   "slides": [
     {
       "id": "s1",
-      "slide_type": "title|content|two_column|comparison|timeline|chart|stat|image_text|image_full|quote|code|team|section_divider|agenda|table",
-      "title": "Slide title",
-      "elements": [
-        {"id": "e1", "type": "title|subtitle|kicker|takeaway|body|bullet_list|image|chart|code|quote|stat_callout|table_data|tag_badge|callout_box|source_citation|progress_bar", "content": "..."}
-      ],
-      "speaker_notes": "Notes for the presenter",
-      "metadata": {"visual_style": {"bg_variant": "solid|gradient|accent_wash|dark_invert", "decoration": "none|corner_accent|top_bar|side_stripe", "card_style": "flat|elevated|glass|outlined"}}
+      "slide_type": "content",
+      "title": "Slide title (plain text for PPTX export)",
+      "elements": [{"id": "s1_e1", "type": "body", "content": "Text here"}],
+      "speaker_notes": "2-4 sentences for the presenter",
+      "metadata": {"slide_style": {"background": {"value": "#hex"}, "title": {"color": "..."}, "body": {"color": "..."}, "accentColor": "#hex"}},
+      "html": "<div style='width:100%;height:100%;position:relative;overflow:hidden;box-sizing:border-box;background:#1a1a2e;padding:7% 6%;'><p style='font-size:48px;font-weight:900;color:#fff;'>YOUR VISUAL MASTERPIECE</p></div>"
     }
   ],
-  "metadata": {"audience": "...", "tone": "..."}
+  "metadata": {"audience": "...", "tone": "...", "fonts": ["FontName1", "FontName2"]}
 }
 
-- For bullet_list elements, content must be a JSON array of strings
-- For "kicker" elements, content is a SHORT phrase (2-5 words) that categorizes the slide (e.g., "MARKET OPPORTUNITY", "KEY INSIGHT", "PHASE 2"). Include a kicker on content, two_column, comparison, timeline, chart, and stat slides.
-- For "takeaway" elements, content is a single concise sentence (max 15 words) summarizing the slide's key message. Include a takeaway on content, two_column, comparison, timeline, chart, and stat slides.
-- Each slide must have a unique id (s1, s2, ...) and each element a unique id (e1, e2, ...)
-- Match the slide_type to the content purpose:
-  * Use "title" for opening and closing slides
-  * Use "content" for main narrative slides
-  * Use "two_column" when comparing or contrasting
-  * Use "quote" for testimonials or key insights
-  * Use "chart" when referencing data or metrics
-  * Use "image_text" for split layout with image and descriptive text
-  * Use "image_full" for dramatic full-bleed visuals
-  * For image elements, content MUST be a JSON object: {"url": "https://images.unsplash.com/...", "alt": "Description of the image"}
-  * Use real, publicly accessible image URLs from Unsplash (https://images.unsplash.com/photo-...), Pexels, or Wikimedia Commons
-  * Choose images that match the slide content and mood — prefer high-quality, landscape-oriented photos
-  * If you cannot find a suitable URL, use {"alt": "Description for AI generation"} without the url field
+═══════════════════════════════════════════════════════════════════
+THE HTML FIELD — THIS IS WHAT THE USER SEES (MANDATORY every slide)
+═══════════════════════════════════════════════════════════════════
 
-For elements with type="chart", content MUST be a structured JSON object:
+Your HTML is rendered DIRECTLY inside a 16:9 container (~960×540px). You have COMPLETE creative freedom.
+The html field is NOT a fallback or extra — it IS the presentation. Design each slide as a visual artwork.
+
+TECHNICAL RULES:
+1. Root <div> must have: style='width:100%;height:100%;position:relative;overflow:hidden;box-sizing:border-box;'
+2. ONLY inline styles. No <style> tags, no CSS classes.
+3. ⚠️ CRITICAL JSON SAFETY: Use SINGLE QUOTES for ALL HTML attribute values (style='...' NOT style="...").
+   The html field is a JSON string wrapped in double quotes, so HTML double quotes WILL BREAK the JSON.
+   ALWAYS write: <div style='color:red;'> NEVER: <div style="color:red;">
+4. IMAGES: <img data-placeholder='true' alt='descriptive search query' style='...' />
+   No src attribute — the system resolves real images from alt text.
+5. SVG: Inline <svg> elements are encouraged for shapes, icons, diagrams, patterns, data viz.
+6. FONTS: font-family:'Google Font Name',fallback. List used fonts in metadata.fonts (max 3).
+7. FORBIDDEN: <script>, <iframe>, <form>, <style>, event handlers.
+
+DESIGN MANDATE:
+- If the user asked for specific aesthetics (Swiss design, minimalism, dark theme, etc.), YOUR HTML MUST REFLECT THAT.
+- Each slide must have a DIFFERENT layout and visual treatment. No two slides should look alike.
+- Use the full visual vocabulary: gradients, SVG decorations, layered positioning, dramatic typography,
+  glassmorphism, geometric shapes, bold whitespace, cinematic color, typographic hierarchy.
+- Think: Apple keynotes, Swiss design posters, Dieter Rams, Pitch.com, Figma presentations.
+- Typography IS design. Use massive type, extreme weight contrast, precise spacing, letter-spacing.
+- NEVER default to generic bullet-point layouts. Be creative with how information is presented.
+
+EXAMPLE — a typographic title slide (notice: ALL single quotes in HTML attributes):
+<div style='width:100%;height:100%;position:relative;overflow:hidden;box-sizing:border-box;background:#ffffff;padding:8% 7%;font-family:Helvetica Neue,Helvetica,Arial,sans-serif;'>
+  <svg style='position:absolute;top:45%;left:50%;transform:translate(-50%,-50%);opacity:0.04;' viewBox='0 0 800 200'><text x='400' y='150' text-anchor='middle' font-size='200' font-weight='900' fill='#000'>Aa</text></svg>
+  <div style='position:absolute;top:12%;left:7%;width:3px;height:30%;background:#E10600;'></div>
+  <div style='position:absolute;top:50%;left:7%;transform:translateY(-50%);'>
+    <p style='margin:0;font-size:64px;font-weight:900;color:#000;line-height:0.95;letter-spacing:-0.03em;'>HELVETICA</p>
+    <p style='margin:16px 0 0;font-size:16px;font-weight:300;color:#666;letter-spacing:0.2em;text-transform:uppercase;'>The Unseen Architecture of Modern Design</p>
+  </div>
+  <p style='position:absolute;bottom:7%;left:7%;margin:0;font-size:10px;color:#999;letter-spacing:0.15em;'>1957 — SWITZERLAND</p>
+</div>
+
+EXAMPLE — a data/content slide with visual treatment (ALL single quotes):
+<div style='width:100%;height:100%;position:relative;overflow:hidden;box-sizing:border-box;background:linear-gradient(160deg,#0a0a0a 0%,#1a1a2e 100%);padding:7% 6%;font-family:Inter,sans-serif;'>
+  <div style='position:absolute;top:0;right:0;width:40%;height:100%;background:linear-gradient(180deg,rgba(225,6,0,0.08),transparent);'></div>
+  <p style='margin:0 0 6px;font-size:10px;letter-spacing:0.2em;color:#E10600;font-weight:700;text-transform:uppercase;'>GLOBAL REACH</p>
+  <h2 style='margin:0 0 30px;font-size:36px;font-weight:800;color:#fff;line-height:1.1;'>Used by 60%% of Fortune 500</h2>
+  <div style='display:grid;grid-template-columns:repeat(3,1fr);gap:20px;'>
+    <div style='padding:20px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:8px;'>
+      <p style='margin:0;font-size:36px;font-weight:900;color:#E10600;'>500+</p>
+      <p style='margin:6px 0 0;font-size:12px;color:#888;'>Brands worldwide</p>
+    </div>
+    <div style='padding:20px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:8px;'>
+      <p style='margin:0;font-size:36px;font-weight:900;color:#fff;'>1957</p>
+      <p style='margin:6px 0 0;font-size:12px;color:#888;'>Year created</p>
+    </div>
+    <div style='padding:20px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:8px;'>
+      <p style='margin:0;font-size:36px;font-weight:900;color:#fff;'>∞</p>
+      <p style='margin:6px 0 0;font-size:12px;color:#888;'>Applications</p>
+    </div>
+  </div>
+</div>
+
+═══════════════════════════════════════════════════════════════════
+STRUCTURED FIELDS (secondary — for PPTX export only):
+═══════════════════════════════════════════════════════════════════
+These fields exist alongside html purely for PPTX export compatibility:
+- slide_type: pick best fit (content, two_column, stat, image_text, etc.)
+- title: plain slide title string
+- elements: array of element objects (see EXACT FORMAT below)
+- speaker_notes: 2-4 sentences of presenter guidance (mandatory every slide)
+- metadata.slide_style: background + title/body colors + accentColor
+
+ELEMENT EXACT FORMAT — every element MUST have these 3 fields:
 {
-  "chart_type": "bar" | "line" | "pie" | "funnel" | "scatter",
-  "title": "Chart Title",
-  "categories": ["Label1", "Label2", ...],
-  "series": [{"name": "Series Name", "values": [1.0, 2.0, ...]}],
-  "x_label": "X Axis Label",
-  "y_label": "Y Axis Label"
+  "id": "s1_e1",     ← REQUIRED unique string (use pattern: s{slide_num}_e{element_num})
+  "type": "body",    ← REQUIRED string (body, bullet_list, title, subtitle, image, chart, stat_callout, etc.)
+  "content": "..."   ← REQUIRED (string, array, or object depending on type)
 }
-For scatter charts, use "points": [{"x": 1.0, "y": 2.0}, ...] instead of categories/series.
-Do NOT use plain text strings for chart content — always use structured JSON.
+⚠️ DO NOT use "text_content", "text", "value", or "description" — the field name is ALWAYS "content".
+⚠️ DO NOT omit "id" — every element needs a unique id string.
 
-For elements with type="stat_callout", content MUST be a JSON array of stat objects:
-[{"value": "85%", "label": "Customer Satisfaction"}, {"value": "2.4M", "label": "Active Users"}]
-Include 1-3 stat objects per slide. Values should be punchy numbers/percentages.
+ELEMENT CONTENT FORMATS (for the "content" field):
+- body: plain string
+- bullet_list: JSON array of short strings
+- kicker: 2-5 word phrase
+- chart: {"chart_type":"bar|line|pie|scatter","title":"...","categories":[...],"series":[{"name":"...","values":[...]}]}
+- stat_callout: [{"value":"85%","label":"Satisfaction"},...]
+- table_data: {"headers":[...],"rows":[[...]...],"badge_column":2}
+- image: {"alt":"description for image search"}
+- callout_box: {"text":"...","attribution":"Source"}
+- timeline bullet_list: "Date | Title | Description | TAG" pipe-delimited
+- agenda bullet_list: "Title: Description" colon-delimited
 
-For "table_data" elements: content = {"headers": ["Col1", "Col2", "Status"], "rows": [["Cell1", "Cell2", "HIGH"], ...], "badge_column": 2}
-For "callout_box" elements: content = {"text": "Synthesizing insight quote", "attribution": "Source"}
-For "source_citation" elements: content = "Source: Company Annual Report 2025"
-For "tag_badge" elements: content = "TAG LABEL"
-
-For agenda slides: bullet_list items formatted as "Section Title: Brief description"
-For timeline slides: bullet_list items formatted as "Date | Event Title | Description | CATEGORY TAG"
-For comparison slides: include a callout_box element with a synthesizing insight
-For title slides: set metadata.date and metadata.category for enhanced visuals
-
-SLIDE CONTENT DENSITY RULES (mandatory):
+SLIDE CONTENT DENSITY:
 - MAX 6 bullets per slide, MAX 8 words per bullet
-- MAX 3 short sentences per body element (25 words max per sentence)
-- The slide should contain MAX 30% of the information (key phrases only). The other 70% belongs in speaker_notes
-- NEVER use placeholder text like "Content to be developed", "TBD", "Lorem ipsum", or "To be added"
-- Every slide must have substantive, specific content — no filler
-- agenda slides: MAX 6 items in bullet_list, each as "Title: Description"
-- table slides: MAX 8 rows, MAX 6 columns
+- MAX 3 short sentences per body (25 words each)
+- 30% on slide, 70% in speaker_notes
+- NO placeholder text ("TBD", "Lorem ipsum")
 
-SPEAKER NOTES REQUIREMENTS (mandatory for every slide):
-- Write 2-4 concise sentences of presenter guidance per slide
-- Include at least one key talking point not visible on the slide
-- Include a transition sentence or audience callout
-- Do NOT repeat bullet points or body text verbatim in notes
-- Title/closing slides may have 1-2 shorter sentences
-- Target 15-60 words per slide's speaker notes
+SPEAKER NOTES (mandatory every slide):
+- 2-4 sentences, 15-60 words
+- Include key talking point NOT on the slide
+- Include transition or audience callout
 
-PER-SLIDE VISUAL STYLE (mandatory for every slide):
-Each slide MUST include a "metadata" field with visual styling tokens:
-  "metadata": {
-    "visual_style": {
-      "bg_variant": "solid|gradient|accent_wash|dark_invert",
-      "decoration": "none|corner_accent|top_bar|side_stripe",
-      "card_style": "flat|elevated|glass|outlined"
-    }
-  }
-
-Visual style rules:
-- bg_variant controls the slide background treatment. "solid" = plain, "gradient" = subtle gradient, "accent_wash" = tinted, "dark_invert" = uses dark title background
-- Title/section_divider slides: bg_variant="solid" or "gradient", decoration="none"
-- Stat slides: prefer bg_variant="accent_wash" or "dark_invert" for visual emphasis
-- Quote slides: prefer bg_variant="gradient" or "dark_invert" for drama
-- NO MORE than 2 consecutive slides with the same bg_variant — vary the backgrounds!
-- Use "dark_invert" sparingly (max 3 slides per deck) for high-impact moments
-- card_style applies to content cards in two_column, comparison, agenda slides
-- Vary decoration across slides — use a mix of "none", "corner_accent", "top_bar", "side_stripe"
-- Create a visual rhythm: alternate between simple and decorated slides"""
+FONTS (deck-level metadata):
+In top-level metadata, include: "fonts": ["Font1", "Font2"] — list all Google Font names used in your HTML (max 3).
+Always use web-safe fallbacks in font-family declarations."""
 
     elif artifact_type == ArtifactType.document:
         return """Generate a DocumentContentTree JSON with this exact schema:
@@ -393,14 +441,15 @@ def get_draft_prompt_with_sequence(
     artifact_type: ArtifactType,
     outline: "Outline",
     slide_sequence: list[dict] | None = None,
+    creation_prompt: str | None = None,
 ) -> str:
     """Enhanced draft prompt that includes planned slide sequence."""
-    base_prompt = get_draft_prompt(artifact_type, outline)
+    base_prompt = get_draft_prompt(artifact_type, outline, creation_prompt=creation_prompt)
 
     if slide_sequence and artifact_type == ArtifactType.slides:
-        sequence_hint = "\n\nPlanned slide sequence — You MUST use the exact slide_type specified for each position. Do NOT substitute content or image_text for the assigned type:\n"
+        sequence_hint = "\n\nPlanned slide sequence (suggested types — you may override if your HTML design calls for a different approach):\n"
         for i, s in enumerate(slide_sequence, 1):
-            sequence_hint += f"  Slide {i}: slide_type={s['slide_type']} (MANDATORY), position={s['position']}\n"
+            sequence_hint += f"  Slide {i}: slide_type={s['slide_type']}, position={s['position']}\n"
 
         # Count content vs structural for mapping guidance
         content_count = sum(1 for s in slide_sequence if s["position"] == "body" and s["slide_type"] not in ("title", "section_divider"))
@@ -410,6 +459,9 @@ def get_draft_prompt_with_sequence(
             f"These map 1:1 to the {content_count} body-position content slides above. "
             "Opening, closing, and section_divider slides are structural — generate "
             "appropriate content for them based on the deck's topic, not from specific outline items.\n"
+            "\nIMPORTANT: The html field is what the user SEES. The slide_type and elements fields "
+            "are for PPTX export only. Your HTML should be a VISUAL MASTERPIECE for each slide. "
+            "Do NOT make all slides look the same — vary layouts, colors, typography dramatically.\n"
         )
         base_prompt += sequence_hint
 

@@ -677,42 +677,8 @@ def validate_custom_colors(
         validated["title_background"] = _lightness_shift(validated["primary"], -0.15)
         warnings.append("Derived title_background from primary")
 
-    # 2. Background luminance constraint — avoid muddy middle
-    bg_lum = _relative_luminance(validated["background"])
-    if 0.15 < bg_lum < 0.85:
-        original_lum = bg_lum
-        direction = -0.12 if bg_lum < 0.5 else 0.12
-        for _ in range(8):
-            validated["background"] = _lightness_shift(validated["background"], direction)
-            bg_lum = _relative_luminance(validated["background"])
-            if bg_lum <= 0.15 or bg_lum >= 0.85:
-                break
-        warnings.append(f"Adjusted background luminance from {original_lum:.2f} to {bg_lum:.2f}")
-
-    # 3. WCAG AA contrast validation — text vs background
-    for text_field in ("text", "text_light"):
-        if not _check_contrast(validated[text_field], validated["background"]):
-            validated[text_field] = _fix_contrast(validated[text_field], validated["background"])
-            warnings.append(f"Fixed {text_field} contrast against background")
-
-    # 4. Saturation bounds — avoid neon disasters
-    for color_field in ("primary", "secondary", "accent"):
-        h, l, s = _hex_to_hls(validated[color_field])
-        clamped_s = max(0.15, min(0.85, s))
-        if abs(clamped_s - s) > 0.01:
-            validated[color_field] = _hls_to_hex(h, l, clamped_s)
-            warnings.append(f"Clamped {color_field} saturation from {s:.2f} to {clamped_s:.2f}")
-
-    # 5. Color harmony — primary and accent should be visually distinct
-    h_primary = _hex_to_hls(validated["primary"])[0]
-    h_accent = _hex_to_hls(validated["accent"])[0]
-    hue_dist = abs(h_primary - h_accent)
-    if hue_dist > 0.5:
-        hue_dist = 1.0 - hue_dist
-    hue_degrees = hue_dist * 360
-    if hue_degrees < 20:
-        validated["accent"] = _hue_rotate(validated["accent"], 30)
-        warnings.append(f"Rotated accent hue for harmony (was {hue_degrees:.0f}° from primary)")
+    # No aesthetic guardrails — LLM has full creative control.
+    # Colors are accepted as-is after hex format validation.
 
     return SlideThemeColors(**validated), warnings
 
@@ -734,23 +700,16 @@ def create_custom_theme(
     background_style: str = "solid",
     recommended_base_id: str = DEFAULT_THEME_ID,
 ) -> SlideTheme:
-    """Create a validated custom theme from LLM-generated style spec.
+    """Create a custom theme from LLM-generated style spec.
 
-    Falls back to the recommended base theme if validation produces
-    too many auto-corrections (>3), indicating the LLM colors were poor.
-
-    Raises ValueError only if colors are fundamentally unusable AND
-    the recommended base theme doesn't exist.
+    Falls back to the recommended base theme only if colors are
+    fundamentally unusable (invalid hex format).
+    No aesthetic guardrails — LLM has full creative control.
     """
     try:
         validated_colors, warnings = validate_custom_colors(colors)
     except ValueError:
         # Colors completely unusable — fall back to base theme
-        base = _THEMES.get(recommended_base_id, _THEMES[DEFAULT_THEME_ID])
-        return base
-
-    if len(warnings) > 3:
-        # Too many corrections — LLM colors were poor
         base = _THEMES.get(recommended_base_id, _THEMES[DEFAULT_THEME_ID])
         return base
 

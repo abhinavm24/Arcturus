@@ -8,6 +8,7 @@ import { SlideFilmstrip } from './SlideFilmstrip';
 import { SlideRenderer } from './SlideRenderer';
 import { SlideEditPanel } from './SlideEditPanel';
 import { SlideBottomBar } from './SlideBottomBar';
+import { useSlideFonts } from '../../hooks/useSlideFonts';
 import type { SlideTheme } from './renderers';
 import type { Slide } from './normalizers';
 
@@ -61,6 +62,13 @@ function SlidePreviewContent() {
     if (!activeArtifact?.content_tree?.slides) return [];
     return activeArtifact.content_tree.slides;
   }, [activeArtifact?.content_tree?.slides]);
+
+  // Load custom fonts declared by LLM in content_tree metadata
+  const deckFonts = useMemo(() => {
+    const meta = activeArtifact?.content_tree?.metadata;
+    return Array.isArray(meta?.fonts) ? meta.fonts as string[] : undefined;
+  }, [activeArtifact?.content_tree?.metadata]);
+  useSlideFonts(deckFonts);
 
   // Initialize once on mount (this component remounts each open via key)
   const initialTheme = activeArtifact?.theme_id
