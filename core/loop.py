@@ -1098,6 +1098,22 @@ class AgentLoop4:
                         if context._has_executable_code(output):
                             execution_result = await context._auto_execute_code(step_id, output)
                             iterations_data[-1]["execution_result"] = execution_result
+
+                            # If code execution FAILED, retry with error feedback instead of returning broken output
+                            if execution_result.get("status") == "error" and turn < max_turns:
+                                exec_error = execution_result.get("error", "Unknown error")
+                                log_step(f"⚠️ Code execution failed for {step_id}: {exec_error[:200]}. Retrying...", symbol="🔄")
+                                current_input = build_agent_input(
+                                    instruction=(
+                                        f"Your code execution FAILED with this error:\n\n```\n{exec_error}\n```\n\n"
+                                        "Fix the code and try again. Make sure you only use functions/variables that are available in the sandbox. "
+                                        "Available tools must be called via `call_tool`, not as Python functions."
+                                    ),
+                                    previous_output=output,
+                                    iteration_context={"execution_error": exec_error}
+                                )
+                                continue  # Retry in next iteration
+
                             # Merge so mark_done skips re-execution (avoids duplicate code.execution span)
                             output = context._merge_execution_results(output, execution_result)
                         return {"success": True, "output": output}

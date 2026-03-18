@@ -494,12 +494,19 @@ class ExecutionContextManager:
                         extracted = True
                 
                 # Strategy 2: Extract from direct agent output (ThinkerAgent, DistillerAgent, FormatterAgent)
+                # Skip empty placeholders ([], {}, None, "") when execution failed — these are
+                # pre-execution stubs the agent set, not real data.
+                exec_failed = execution_result and execution_result.get("status") == "error"
                 if not extracted and output and isinstance(output, dict):
                     # Check root
                     if write_key in output:
-                        globals_schema[write_key] = output[write_key]
-                        print(f"✅ Extracted {write_key} = {output[write_key]} (direct)")
-                        extracted = True
+                        val = output[write_key]
+                        if exec_failed and (val is None or val == [] or val == {} or val == ""):
+                            print(f"⚠️  Skipping empty placeholder for {write_key} (code execution failed)")
+                        else:
+                            globals_schema[write_key] = val
+                            print(f"✅ Extracted {write_key} = {val} (direct)")
+                            extracted = True
                     # Check nested 'output' dictionary (common pattern)
                     elif "output" in output and isinstance(output["output"], dict) and write_key in output["output"]:
                         val = output["output"][write_key]
@@ -519,11 +526,15 @@ class ExecutionContextManager:
                         print(f"✅ Extracted {write_key} = [Markdown Report] (mapped from 'markdown_report')")
                         extracted = True
                 
-                # Strategy 3: Emergency fallback - try to find any matching data
+                # Strategy 3: Emergency fallback
                 if not extracted:
-                    print(f"⚠️  Could not extract {write_key}")
-                    # Set empty placeholder to prevent downstream errors
-                    globals_schema[write_key] = []
+                    if exec_failed:
+                        err_msg = execution_result.get("error", "Unknown execution error")
+                        print(f"⚠️  Could not extract {write_key} — code execution failed: {err_msg[:200]}")
+                        globals_schema[write_key] = f"[ERROR: Data unavailable — {err_msg}]"
+                    else:
+                        print(f"⚠️  Could not extract {write_key}")
+                        globals_schema[write_key] = []
         
         # Store results
         node_data['status'] = 'completed'
