@@ -185,6 +185,11 @@ async def lifespan(app: FastAPI):
 
     scheduler_service.initialize()
     persistence_manager.load_snapshot()
+
+    # ========== EVENT BUS: Restore history & start heartbeat ==========
+    from core.event_bus import event_bus
+    event_bus.initialize()
+    event_bus.start_heartbeat()
     # ========== WATCHTOWER: OpenTelemetry bootstrap ==========
     # Initializes tracing and exports spans to MongoDB + Jaeger.
     # FastAPIInstrumentor auto-creates an HTTP span for every request.
@@ -266,6 +271,9 @@ async def lifespan(app: FastAPI):
     yield
 
     print("🛑 API Shutting down...")
+    # Cancel event bus heartbeat
+    if event_bus._heartbeat_task:
+        event_bus._heartbeat_task.cancel()
     if health_scheduler is not None:
         await health_scheduler.stop()
         print("🛑 [Watchtower] Health scheduler stopped")

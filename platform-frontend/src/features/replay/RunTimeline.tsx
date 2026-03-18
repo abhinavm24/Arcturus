@@ -57,11 +57,13 @@ export const RunTimeline: React.FC = () => {
         toggleReplayMode(true);
 
         // Show only nodes up to this step
+        const isLastStep = stepIndex === savedNodes.length - 1;
         const visibleNodes = savedNodes.slice(0, stepIndex + 1).map((node, i) => ({
             ...node,
             data: {
                 ...node.data,
-                status: (i === stepIndex ? 'running' : 'completed') as 'running' | 'completed' | 'failed' | 'pending'
+                // On the last step, mark everything completed (replay finished)
+                status: (i === stepIndex && !isLastStep ? 'running' : 'completed') as 'running' | 'completed' | 'failed' | 'pending'
             }
         }));
 
@@ -109,6 +111,8 @@ export const RunTimeline: React.FC = () => {
                     setTimeout(() => loadStep(next), 0);
                     return next;
                 } else {
+                    // Final step reached — reload last step so all nodes turn green
+                    setTimeout(() => loadStep(savedNodes.length - 1), 0);
                     setIsPlaying(false);
                     return prev;
                 }

@@ -451,8 +451,15 @@ class AgentLoop4:
 
                         if self._should_replan():
                             log_step("♻️ Adaptive Re-planning: Clarification resolved, formulating next steps...", symbol="🔄")
+                            # Mark processed clarification leaves so they don't re-trigger
+                            for nid, nd in self.context.plan_graph.nodes(data=True):
+                                if (nd.get("agent") == "ClarificationAgent"
+                                        and nd.get("status") == "completed"
+                                        and not list(self.context.plan_graph.successors(nid))):
+                                    nd["_replan_consumed"] = True
                             self.context.plan_graph.nodes["Query"]["status"] = "running"
                             self.context._save_session()
+                            await asyncio.sleep(0.1)  # yield to event loop
                             continue
                         else:
                             return self.context
@@ -491,21 +498,23 @@ class AgentLoop4:
         Check if the graph needs expansion (re-planning).
         Conditions:
         1. All current nodes are finished (completed/skipped).
-        2. At least one ClarificationAgent recently completed.
+        2. At least one ClarificationAgent recently completed (and not yet consumed).
         3. That ClarificationAgent was a 'leaf' (had no successors in the current graph).
         """
         # If any node is still pending/running, we aren't at a dead end yet
         if not self.context.all_done():
             return False
-            
+
         has_new_leaf_clarification = False
         for node_id, node_data in self.context.plan_graph.nodes(data=True):
-            if node_data.get("agent") == "ClarificationAgent" and node_data.get("status") == "completed":
+            if (node_data.get("agent") == "ClarificationAgent"
+                    and node_data.get("status") == "completed"
+                    and not node_data.get("_replan_consumed")):
                 # Check if it was a leaf node (no arrows coming out)
                 if not list(self.context.plan_graph.successors(node_id)):
                     has_new_leaf_clarification = True
                     break
-        
+
         return has_new_leaf_clarification
 
     def _merge_plan_into_context(self, new_plan_graph):

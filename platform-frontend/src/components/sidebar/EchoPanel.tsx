@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Mic, Bot, User, ShieldCheck, ShieldOff, Loader2, PlayCircle, Clock, CheckCircle2, XCircle, Zap, Volume2, Radio } from 'lucide-react';
+import { Mic, MicOff, Square, Bot, User, ShieldCheck, ShieldOff, Loader2, PlayCircle, Clock, CheckCircle2, XCircle, Zap, Volume2, Radio } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAppStore } from '@/store';
-import { startVoice } from '@/lib/voice';
+import { startVoice, stopVoice } from '@/lib/voice';
 
 const WAKE_POLL_URL = 'http://localhost:8000/api/voice/wake';
 const PRIVACY_BASE_URL = 'http://localhost:8000/api/voice/privacy';
@@ -56,7 +56,8 @@ export const EchoPanel: React.FC = () => {
     const setCurrentRun = useAppStore(state => state.setCurrentRun);
 
     const [isListening, setIsListening] = useState(false);
-    const [statusText, setStatusText] = useState('Waiting for wake word...');
+    const [voiceState, setVoiceState] = useState<'idle' | 'listening' | 'thinking' | 'speaking'>('idle');
+    const [statusText, setStatusText] = useState('Ready');
     const [liveTranscript, setLiveTranscript] = useState('');
     const [nexusRunActive, setNexusRunActive] = useState(false);
     const [conversation, setConversation] = useState<ConversationEntry[]>([]);
@@ -190,6 +191,7 @@ export const EchoPanel: React.FC = () => {
                 const json = await res.json();
                 if (json.wake) {
                     setIsListening(true);
+                    setVoiceState('listening');
                     setStatusText('Listening...');
                     setLiveTranscript('');
                     setNexusRunActive(false);
@@ -200,12 +202,15 @@ export const EchoPanel: React.FC = () => {
                     const nexusActive = nexusRunRef.current;
                     if (s === 'IDLE') {
                         setIsListening(false);
-                        setStatusText('Waiting for wake word...');
+                        setVoiceState('idle');
+                        setStatusText('Ready');
                         setNexusRunActive(false);
                     } else if (s === 'THINKING') {
                         setIsListening(true);
+                        setVoiceState('thinking');
                         setStatusText(nexusActive ? 'Processing with Nexus...' : 'Thinking...');
                     } else if (s === 'SPEAKING') {
+                        setVoiceState('speaking');
                         if (!nexusActive) { setIsListening(true); setStatusText('Speaking...'); }
                     } else if (s === 'DICTATING') {
                         setIsListening(true);
@@ -233,6 +238,7 @@ export const EchoPanel: React.FC = () => {
             if (ev.type === 'voice_wake') {
                 const isBargeIn = ev.data?.barge_in === true;
                 setIsListening(true);
+                setVoiceState('listening');
                 setStatusText(isBargeIn ? '⚡ Barge-in detected!' : 'Listening...');
                 setLiveTranscript('');
                 setNexusRunActive(false);
@@ -260,6 +266,7 @@ export const EchoPanel: React.FC = () => {
                 setNexusRunActive(active);
                 if (active) {
                     setIsListening(true);
+                    setVoiceState('thinking');
                     setStatusText('Processing with Nexus...');
                     setLiveTranscript(prev => {
                         if (prev.trim()) {
@@ -286,19 +293,30 @@ export const EchoPanel: React.FC = () => {
             } else if (ev.type === 'voice_state') {
                 const s = ev.data?.state;
                 if (s === 'LISTENING') {
-                    setIsListening(true); 
-                    // Don't overwrite explicit barge-in text if we just set it
-                    setStatusText(prev => prev === '⚡ Barge-in detected!' ? prev : 'Listening...'); 
+                    setIsListening(true);
+                    setVoiceState('listening');
+                    setStatusText(prev => prev === '⚡ Barge-in detected!' ? prev : 'Listening...');
                     setNexusRunActive(false);
                 } else if (s === 'THINKING') {
+                    setVoiceState('thinking');
                     setIsListening(true);
                     setStatusText(nexusRunRef.current ? 'Processing with Nexus...' : 'Thinking...');
+                    // Flush live transcript to conversation as user message
+                    setLiveTranscript(prev => {
+                        if (prev.trim()) {
+                            setConversation(c => [...c, {
+                                id: `u-${Date.now()}`, role: 'user', text: prev.trim(), ts: Date.now(),
+                            }]);
+                        }
+                        return '';
+                    });
                 } else if (s === 'SPEAKING') {
+                    setVoiceState('speaking');
                     if (!nexusRunRef.current) { setIsListening(true); setStatusText('Speaking...'); }
                 } else if (s === 'DICTATING') {
                     setIsListening(true); setStatusText('Dictating — say "stop dictation" to finish.');
                 } else if (s === 'IDLE') {
-                    setIsListening(false); setStatusText('Waiting for wake word...'); setNexusRunActive(false);
+                    setIsListening(false); setVoiceState('idle'); setStatusText('Ready'); setNexusRunActive(false);
                     setLiveTranscript(prev => {
                         if (prev.trim()) {
                             setConversation(c => [...c, {
@@ -314,10 +332,18 @@ export const EchoPanel: React.FC = () => {
         lastProcessedIndex.current = events.length - 1;
     }, [events, sidebarTab, setSidebarTab]);
 
-    const handleStart = async () => {
-        await startVoice();
-        setIsListening(true);
-        setStatusText('Listening...');
+    const handleMicToggle = async () => {
+        if (isListening && voiceState === 'listening') {
+            // Stop: process what's been said so far
+            await stopVoice();
+            setStatusText('Processing...');
+        } else {
+            // Start listening
+            await startVoice();
+            setIsListening(true);
+            setVoiceState('listening');
+            setStatusText('Listening...');
+        }
     };
 
     const isPrivate = privacy?.privacy_mode ?? false;
@@ -374,13 +400,18 @@ export const EchoPanel: React.FC = () => {
                         {isPrivate ? 'Private' : 'Cloud'}
                     </button>
 
-                    {/* Manual mic trigger */}
+                    {/* Mic toggle (small header version) */}
                     <button
-                        onClick={handleStart}
-                        title="Start listening manually"
-                        className="p-1.5 rounded-lg bg-primary/10 hover:bg-primary/20 transition text-primary"
+                        onClick={handleMicToggle}
+                        title={isListening ? 'Stop recording' : 'Start recording'}
+                        className={cn(
+                            'p-1.5 rounded-lg transition-all duration-200',
+                            isListening && voiceState === 'listening'
+                                ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30 ring-1 ring-red-500/50'
+                                : 'bg-primary/10 hover:bg-primary/20 text-primary'
+                        )}
                     >
-                        <Mic className="w-4 h-4" />
+                        {isListening && voiceState === 'listening' ? <Square className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
                     </button>
                 </div>
             </div>
@@ -444,27 +475,73 @@ export const EchoPanel: React.FC = () => {
                 </div>
             )}
 
-            {/* ── Mic status ───────────────────────────────────────── */}
-            <div className="shrink-0 flex flex-col items-center gap-3 pt-4 pb-3 px-4 border-b border-border/30">
-                <div className={cn(
-                    'w-14 h-14 rounded-full flex items-center justify-center transition-all duration-300',
-                    nexusRunActive
-                        ? 'bg-violet-500/20 text-violet-400 shadow-[0_0_25px_rgba(139,92,246,0.35)] animate-pulse'
-                        : isListening
-                            ? 'bg-primary/20 text-primary shadow-[0_0_25px_rgba(56,189,248,0.3)] animate-pulse'
-                            : 'bg-muted/50 text-muted-foreground'
-                )}>
-                    <Mic className={cn('w-6 h-6', isListening ? 'animate-bounce' : '')} />
-                </div>
+            {/* ── Mic button + status ──────────────────────────────── */}
+            <div className="shrink-0 flex flex-col items-center gap-3 pt-5 pb-4 px-4 border-b border-border/30">
+                {/* Large clickable mic button */}
+                <button
+                    onClick={handleMicToggle}
+                    disabled={voiceState === 'thinking' || voiceState === 'speaking'}
+                    className={cn(
+                        'relative w-20 h-20 rounded-full flex items-center justify-center transition-all duration-300 cursor-pointer',
+                        'focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-primary',
+                        voiceState === 'listening'
+                            ? 'bg-red-500/20 text-red-400 shadow-[0_0_40px_rgba(239,68,68,0.4)] scale-105'
+                            : voiceState === 'thinking'
+                                ? 'bg-amber-500/20 text-amber-400 shadow-[0_0_30px_rgba(245,158,11,0.3)]'
+                                : voiceState === 'speaking'
+                                    ? 'bg-violet-500/20 text-violet-400 shadow-[0_0_30px_rgba(139,92,246,0.35)]'
+                                    : 'bg-muted/50 text-muted-foreground hover:bg-primary/15 hover:text-primary hover:shadow-[0_0_20px_rgba(56,189,248,0.2)] hover:scale-105',
+                        (voiceState === 'thinking' || voiceState === 'speaking') && 'cursor-not-allowed'
+                    )}
+                >
+                    {/* Pulsing ring when recording */}
+                    {voiceState === 'listening' && (
+                        <>
+                            <span className="absolute inset-0 rounded-full border-2 border-red-400/60 animate-ping" />
+                            <span className="absolute inset-0 rounded-full border-2 border-red-400/40" />
+                        </>
+                    )}
+                    {voiceState === 'thinking' && (
+                        <span className="absolute inset-0 rounded-full border-2 border-amber-400/40 animate-pulse" />
+                    )}
+                    {voiceState === 'speaking' && (
+                        <span className="absolute inset-0 rounded-full border-2 border-violet-400/40 animate-pulse" />
+                    )}
 
+                    {/* Icon */}
+                    {voiceState === 'listening' ? (
+                        <Square className="w-8 h-8 relative z-10" />
+                    ) : voiceState === 'thinking' ? (
+                        <Loader2 className="w-8 h-8 relative z-10 animate-spin" />
+                    ) : voiceState === 'speaking' ? (
+                        <Volume2 className="w-8 h-8 relative z-10 animate-pulse" />
+                    ) : (
+                        <Mic className="w-8 h-8 relative z-10" />
+                    )}
+                </button>
+
+                {/* Status text */}
                 <span className={cn(
-                    'text-xs font-medium tracking-wide text-center',
-                    nexusRunActive ? 'text-violet-400 animate-pulse'
-                        : isListening ? 'text-foreground animate-pulse'
-                            : 'text-muted-foreground'
+                    'text-xs font-semibold tracking-wide text-center transition-colors duration-200',
+                    voiceState === 'listening' ? 'text-red-400'
+                        : voiceState === 'thinking' ? 'text-amber-400'
+                            : voiceState === 'speaking' ? 'text-violet-400'
+                                : 'text-muted-foreground'
                 )}>
                     {statusText}
                 </span>
+
+                {/* Hint text */}
+                {voiceState === 'idle' && (
+                    <p className="text-[10px] text-muted-foreground/50 text-center">
+                        Tap to start recording
+                    </p>
+                )}
+                {voiceState === 'listening' && (
+                    <p className="text-[10px] text-red-400/60 text-center">
+                        Tap to stop &amp; send
+                    </p>
+                )}
 
                 {nexusRunActive && (
                     <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-violet-500/15 border border-violet-500/30 text-violet-400 text-[10px] font-medium">
@@ -476,12 +553,13 @@ export const EchoPanel: React.FC = () => {
                     </div>
                 )}
 
-                {isListening && (
+                {/* Audio visualizer bars */}
+                {voiceState === 'listening' && (
                     <div className="flex items-end justify-center gap-[3px] h-5">
                         {[...Array(10)].map((_, i) => (
                             <div
                                 key={i}
-                                className={cn('w-1 rounded-full animate-pulse', nexusRunActive ? 'bg-violet-400/80' : 'bg-primary/80')}
+                                className="w-1 rounded-full animate-pulse bg-red-400/70"
                                 style={{ height: `${20 + (i % 3) * 30}%`, animationDelay: `${i * 0.1}s`, animationDuration: '0.8s' }}
                             />
                         ))}
@@ -541,18 +619,7 @@ export const EchoPanel: React.FC = () => {
                             </div>
                         )}
                         {conversation.length === 0 && !liveTranscript && (
-                            <div className="flex-1 flex flex-col items-center justify-center text-center gap-6 select-none py-6 px-4">
-                                {/* Mic icon and Wake Word */}
-                                <div className="space-y-3">
-                                    <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mx-auto">
-                                        <Mic className="w-5 h-5 text-primary/50" />
-                                    </div>
-                                    <div className="space-y-1">
-                                        <p className="text-[10px] uppercase font-bold tracking-widest text-muted-foreground/50">Wake Word</p>
-                                        <p className="text-sm font-semibold text-primary/90 italic">"Hey Arcturus"</p>
-                                    </div>
-                                </div>
-
+                            <div className="flex-1 flex flex-col items-center justify-center text-center gap-5 select-none py-6 px-4">
                                 {/* Examples */}
                                 <div className="w-full max-w-[240px] space-y-3">
                                     <div className="flex items-center gap-2">
@@ -563,10 +630,10 @@ export const EchoPanel: React.FC = () => {
                                     <div className="space-y-2 text-left">
                                         {[
                                             "What is Quantum Computing?",
-                                            "Start transcribing",
+                                            "Summarize this project",
                                             "Open the Explorer"
                                         ].map((example, i) => (
-                                            <div key={i} className="flex items-center gap-2.5 group cursor-pointer" onClick={() => startVoice()}>
+                                            <div key={i} className="flex items-center gap-2.5 group cursor-pointer" onClick={handleMicToggle}>
                                                 <div className="w-1 h-1 rounded-full bg-primary/40 group-hover:bg-primary transition-colors" />
                                                 <p className="text-[11px] text-muted-foreground/70 group-hover:text-foreground transition-colors italic leading-tight">
                                                     "{example}"
@@ -577,7 +644,8 @@ export const EchoPanel: React.FC = () => {
                                 </div>
 
                                 <p className="text-[10px] text-muted-foreground/40 leading-relaxed max-w-[200px]">
-                                    Or click the <Mic className="w-3 h-3 inline-block align-middle text-primary/50 mx-0.5" /> button above to start listening manually.
+                                    Tap the mic button above, speak, then tap again to send.
+                                    Or say <span className="italic text-primary/60">"Hey Arcturus"</span>.
                                 </p>
                             </div>
                         )}

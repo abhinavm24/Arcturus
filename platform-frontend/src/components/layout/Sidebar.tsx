@@ -29,6 +29,7 @@ import { GraphPanel } from '@/components/sidebar/GraphPanel';
 import { StudioSidebar } from '@/features/studio/StudioSidebar';
 import { SwarmSidebar } from '@/features/swarm/SwarmSidebar';
 import { CanvasPanel } from '@/components/sidebar/CanvasPanel';
+import { SchedulerPanel } from '@/components/sidebar/SchedulerPanel';
 
 const NavIcon = ({ icon: Icon, label, tab, active, onClick, tooltip }: {
     icon: any,
@@ -138,6 +139,7 @@ export const Sidebar: React.FC<{ hideSubPanel?: boolean }> = ({ hideSubPanel }) 
     const [searchQuery, setSearchQuery] = React.useState("");
     const [isOptimizing, setIsOptimizing] = React.useState(false);
     const [runSpaceId, setRunSpaceId] = React.useState<string | null>(null);
+    const [runSourceFilter, setRunSourceFilter] = React.useState<'all' | 'manual' | 'scheduled'>('manual');
 
     // Sync run space from current space when dialog opens
     React.useEffect(() => {
@@ -147,14 +149,19 @@ export const Sidebar: React.FC<{ hideSubPanel?: boolean }> = ({ hideSubPanel }) 
         }
     }, [isNewRunOpen, currentSpaceId, fetchSpaces]);
 
-    // Filter runs by search and by space (Phase 4). Global = only unscoped runs; space = only runs in that space.
+    // Filter runs by search, space, and source (manual vs scheduled).
     const filteredRuns = React.useMemo(() => {
         let list = runs;
         if (currentSpaceId) {
             list = list.filter((r) => r.space_id === currentSpaceId);
         } else {
-            // Global: show only runs with no space (unscoped)
             list = list.filter((r) => !r.space_id || r.space_id === '__global__');
+        }
+        // Source filter: scheduled runs have IDs starting with "auto_"
+        if (runSourceFilter === 'manual') {
+            list = list.filter((r) => !r.id.startsWith('auto_'));
+        } else if (runSourceFilter === 'scheduled') {
+            list = list.filter((r) => r.id.startsWith('auto_'));
         }
         if (searchQuery.trim()) {
             list = list.filter((run) =>
@@ -163,7 +170,7 @@ export const Sidebar: React.FC<{ hideSubPanel?: boolean }> = ({ hideSubPanel }) 
             );
         }
         return list;
-    }, [runs, searchQuery, currentSpaceId]);
+    }, [runs, searchQuery, currentSpaceId, runSourceFilter]);
 
     const currentSpaceName = currentSpaceId
         ? spaces.find((s) => s.space_id === currentSpaceId)?.name || 'Space'
@@ -312,14 +319,32 @@ export const Sidebar: React.FC<{ hideSubPanel?: boolean }> = ({ hideSubPanel }) 
                                         </DialogContent>
                                     </Dialog>
                                 </div>
-                                <button
-                                    onClick={() => useAppStore.getState().setIsSpacesModalOpen(true)}
-                                    className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1"
-                                    title="Manage Spaces"
-                                >
-                                    <FolderOpen className="w-3 h-3" />
-                                    Space: {currentSpaceName}
-                                </button>
+                                <div className="flex items-center justify-between">
+                                    <button
+                                        onClick={() => useAppStore.getState().setIsSpacesModalOpen(true)}
+                                        className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1"
+                                        title="Manage Spaces"
+                                    >
+                                        <FolderOpen className="w-3 h-3" />
+                                        Space: {currentSpaceName}
+                                    </button>
+                                    <div className="flex items-center gap-0.5 bg-muted/30 rounded-md p-0.5">
+                                        {(['all', 'manual', 'scheduled'] as const).map((f) => (
+                                            <button
+                                                key={f}
+                                                onClick={() => setRunSourceFilter(f)}
+                                                className={cn(
+                                                    "px-1.5 py-0.5 rounded text-[9px] font-medium transition-colors capitalize",
+                                                    runSourceFilter === f
+                                                        ? "bg-background text-foreground shadow-sm"
+                                                        : "text-muted-foreground hover:text-foreground"
+                                                )}
+                                            >
+                                                {f}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
                             </div>
 
                             {/* List - Matches Remme Style */}
@@ -439,6 +464,7 @@ export const Sidebar: React.FC<{ hideSubPanel?: boolean }> = ({ hideSubPanel }) 
                     {sidebarTab === 'studio' && <StudioSidebar />}
                     {sidebarTab === 'swarm' && <SwarmSidebar />}
                     {sidebarTab === 'canvas' && <CanvasPanel />}
+                    {sidebarTab === 'scheduler' && <SchedulerPanel />}
                     {/* Persist AppsSidebar to prevent reloading app components */}
                     <div style={{ display: sidebarTab === 'apps' ? 'block' : 'none', height: '100%' }}>
                         <AppsSidebar />

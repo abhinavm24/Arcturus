@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { useAppStore } from '@/store';
-import { Search, Brain, Trash2, Plus, AlertCircle, TriangleAlert, Settings2, Monitor, Shield, Code2, Terminal, Heart, Zap, Utensils, Music, Film, BookOpen, Briefcase, Sparkles, RefreshCw, Coffee, Dog, Palette, MessageSquare, Globe, PawPrint, ListTree, GitPullRequest, FolderOpen } from 'lucide-react';
+import { Search, Brain, Trash2, Plus, AlertCircle, TriangleAlert, Settings2, Monitor, Shield, Code2, Terminal, Heart, Zap, Utensils, Music, Film, BookOpen, Briefcase, Sparkles, RefreshCw, Coffee, Dog, Palette, MessageSquare, Globe, PawPrint, ListTree, GitPullRequest, FolderOpen, Loader2, WifiOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -80,7 +80,7 @@ export const RemmePanel: React.FC = () => {
 const BANNER_AUTO_DISMISS_MS = 5000;
 
 const SnippetsView: React.FC = () => {
-    const { memories, fetchMemories, addMemory, deleteMemory, cleanupDanglingMemories, isRemmeAddOpen: isAddOpen, setIsRemmeAddOpen: setIsAddOpen, spaces, currentSpaceId, setCurrentSpaceId, fetchSpaces, setIsSpacesModalOpen, recommendSpace } = useAppStore();
+    const { memories, memoriesLoading, memoriesError, fetchMemories, addMemory, deleteMemory, cleanupDanglingMemories, isRemmeAddOpen: isAddOpen, setIsRemmeAddOpen: setIsAddOpen, spaces, currentSpaceId, setCurrentSpaceId, fetchSpaces, setIsSpacesModalOpen, recommendSpace } = useAppStore();
     const [searchQuery, setSearchQuery] = useState("");
     const [expandedMemoryId, setExpandedMemoryId] = useState<string | null>(null);
     const [newMemoryText, setNewMemoryText] = useState("");
@@ -94,7 +94,14 @@ const SnippetsView: React.FC = () => {
     memorySpaceIdRef.current = memorySpaceId;
 
     useEffect(() => {
-        fetchMemories();
+        fetchMemories().then(() => {
+            // Auto-retry once after 3s if first fetch failed (e.g. backend still starting)
+            const { memoriesError } = useAppStore.getState();
+            if (memoriesError) {
+                const t = setTimeout(() => fetchMemories(), 3000);
+                return () => clearTimeout(t);
+            }
+        });
     }, [currentSpaceId, fetchMemories]);
 
     useEffect(() => {
@@ -334,7 +341,23 @@ const SnippetsView: React.FC = () => {
 
             {/* List */}
             <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-hide">
-                {filteredMemories.length === 0 ? (
+                {memoriesLoading ? (
+                    <div className="flex flex-col items-center justify-center py-20 px-8 text-center space-y-4 opacity-50">
+                        <Loader2 className="w-10 h-10 animate-spin text-primary" />
+                        <p className="text-[10px] font-bold uppercase tracking-widest">Loading memories...</p>
+                    </div>
+                ) : memoriesError ? (
+                    <div className="flex flex-col items-center justify-center py-20 px-8 text-center space-y-4">
+                        <WifiOff className="w-10 h-10 text-orange-400 opacity-60" />
+                        <p className="text-[10px] font-bold uppercase tracking-widest text-orange-400">Backend unreachable</p>
+                        <button
+                            onClick={() => fetchMemories()}
+                            className="mt-2 px-4 py-1.5 text-xs font-medium rounded-md bg-primary/10 hover:bg-primary/20 text-primary transition-colors"
+                        >
+                            Retry
+                        </button>
+                    </div>
+                ) : filteredMemories.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-20 px-8 text-center space-y-4 opacity-30">
                         <div className="relative">
                             <Brain className="w-12 h-12 mx-auto" />

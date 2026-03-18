@@ -230,8 +230,10 @@ class Orchestrator:
             self._publish("voice_nexus_run", {"active": False, "run_id": active_run, "reason": "barge_in"})
         self._stop_active_run_async()
 
-        # Start a new voice session (if coming from IDLE, i.e. fresh wake)
-        if prev_state == "IDLE":
+        # Start or resume a voice session.
+        # If coming from IDLE with no existing session, start a new one.
+        # If a session already exists (user continuing conversation), keep it.
+        if prev_state == "IDLE" and not self.session_logger.session_id:
             self.session_logger.start_session()
 
 
@@ -1386,8 +1388,33 @@ class Orchestrator:
             if self.state == "LISTENING":
                 print("💤 [Orchestrator] Follow-up window expired. Going IDLE.")
                 self._set_state("IDLE")
-        # Flush the voice session log when going idle
-        self.session_logger.end_session()
+        # Save session to disk but keep conversation history so the user can
+        # continue the conversation by pressing mic again.
+        self.session_logger.save_session()
+
+    def manual_stop(self) -> dict:
+        """
+        Called when the user presses the mic button a second time to stop
+        recording.  Immediately processes whatever has been spoken so far
+        instead of waiting for the silence timeout.
+        """
+        with self._lock:
+            if self.state != "LISTENING":
+                return {"status": self.state.lower()}
+
+            self._cancel_silence_timer()
+
+            if self._utterance_buffer:
+                # Process the buffer immediately (same as silence timeout)
+                threading.Thread(
+                    target=self._on_silence_timeout,
+                    daemon=True,
+                ).start()
+                return {"status": "processing"}
+            else:
+                # Nothing was said — just go idle
+                self._set_state("IDLE")
+                return {"status": "idle"}
 
     def _cancel_follow_up(self):
         if self._follow_up_timer:

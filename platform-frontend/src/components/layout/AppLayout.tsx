@@ -92,9 +92,10 @@ export const AppLayout: React.FC = () => {
         return false;
     }, [sidebarTab, selectedNodeId, selectedAppCardId, selectedExplorerNodeId, showRagInsights, selectedLibraryComponent, showNewsChatPanel, currentRun, selectedAgentId, selectedCanvasWidgetId]);
 
-    // Scheduler, Console, Canvas, etc. collapse left panel to rail only
+    // Console, Canvas, etc. collapse left panel to rail only
     // Echo should NOT be hidden when inspector is open, because the conversation is the primary surface.
-    const hideSidebarSubPanel = (isInspectorOpen && sidebarTab !== 'echo' && sidebarTab !== 'canvas') || sidebarTab === 'ide' || sidebarTab === 'scheduler' || sidebarTab === 'console' || sidebarTab === 'skills' || sidebarTab === 'studio' || sidebarTab === 'admin' || !isSidebarSubPanelOpen;
+    // Scheduler now uses a split-panel layout (left job list + center detail), so it keeps its sub-panel.
+    const hideSidebarSubPanel = (isInspectorOpen && sidebarTab !== 'echo' && sidebarTab !== 'canvas') || sidebarTab === 'ide' || sidebarTab === 'console' || sidebarTab === 'skills' || sidebarTab === 'studio' || sidebarTab === 'admin' || !isSidebarSubPanelOpen;
 
     const [leftWidth, setLeftWidth] = useState(400);
     const [rightWidth, setRightWidth] = useState(450); // original was 450px

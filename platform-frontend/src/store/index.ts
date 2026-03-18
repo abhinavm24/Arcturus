@@ -233,6 +233,8 @@ interface IdeSlice {
 
 interface RemmeSlice {
     memories: Memory[];
+    memoriesLoading: boolean;
+    memoriesError: boolean;
     setMemories: (memories: Memory[]) => void;
     fetchMemories: () => Promise<void>;
     addMemory: (text: string, category?: string, space_id?: string | null) => Promise<void>;
@@ -416,9 +418,18 @@ interface InboxSlice {
 // --- Scheduler Slice ---
 interface SchedulerSlice {
     jobs: any[];
+    selectedJobId: string | null;
+    jobHistory: any[];
+    jobHistoryLoading: boolean;
+    triggeredJobIds: Set<string>;
     fetchJobs: () => Promise<void>;
     createJob: (job: { name: string, cron: string, query: string, agent_type?: string }) => Promise<void>;
     deleteJob: (id: string) => Promise<void>;
+    selectJob: (id: string | null) => void;
+    fetchJobHistory: (jobId: string) => Promise<void>;
+    triggerJob: (jobId: string) => Promise<void>;
+    deleteJobHistoryEntry: (jobId: string, runId: string) => Promise<void>;
+    updateJob: (id: string, data: { name?: string, cron?: string, query?: string }) => Promise<void>;
 }
 
 // --- Event Bus Slice ---
@@ -635,6 +646,10 @@ export const useAppStore = create<AppState>()(
 
             // --- Scheduler Slice Implementation ---
             jobs: [],
+            selectedJobId: null,
+            jobHistory: [],
+            jobHistoryLoading: false,
+            triggeredJobIds: new Set<string>(),
             fetchJobs: async () => {
                 try {
                     const res = await api.get(`${API_BASE}/cron/jobs`);
@@ -655,9 +670,75 @@ export const useAppStore = create<AppState>()(
             deleteJob: async (id) => {
                 try {
                     await api.delete(`${API_BASE}/cron/jobs/${id}`);
+                    const wasSelected = get().selectedJobId === id;
                     await get().fetchJobs();
+                    if (wasSelected) set({ selectedJobId: null, jobHistory: [] });
                 } catch (e) {
                     console.error("Failed to delete job", e);
+                }
+            },
+            selectJob: (id) => {
+                set({ selectedJobId: id, jobHistory: [] });
+                if (id) get().fetchJobHistory(id);
+            },
+            fetchJobHistory: async (jobId) => {
+                set({ jobHistoryLoading: true });
+                try {
+                    const res = await api.get(`${API_BASE}/cron/jobs/${jobId}/history`);
+                    set({ jobHistory: res.data, jobHistoryLoading: false });
+                } catch (e) {
+                    console.error("Failed to fetch job history", e);
+                    set({ jobHistoryLoading: false });
+                }
+            },
+            triggerJob: async (jobId) => {
+                try {
+                    // Mark as triggered (running)
+                    const newTriggered = new Set(get().triggeredJobIds);
+                    newTriggered.add(jobId);
+                    set({ triggeredJobIds: newTriggered });
+
+                    await api.post(`${API_BASE}/cron/jobs/${jobId}/trigger`);
+                    await get().fetchJobs();
+
+                    // Poll history frequently to catch the result and clear running state
+                    const prevHistoryLen = get().jobHistory.length;
+                    let polls = 0;
+                    const pollInterval = setInterval(async () => {
+                        polls++;
+                        await get().fetchJobHistory(jobId);
+                        await get().fetchJobs();
+                        // Clear running state when new history appears or timeout
+                        const currentLen = get().jobHistory.length;
+                        if (currentLen > prevHistoryLen || polls >= 24) {
+                            clearInterval(pollInterval);
+                            const updated = new Set(get().triggeredJobIds);
+                            updated.delete(jobId);
+                            set({ triggeredJobIds: updated });
+                        }
+                    }, 5000);
+                } catch (e) {
+                    console.error("Failed to trigger job", e);
+                    const updated = new Set(get().triggeredJobIds);
+                    updated.delete(jobId);
+                    set({ triggeredJobIds: updated });
+                }
+            },
+            deleteJobHistoryEntry: async (jobId, runId) => {
+                try {
+                    await api.delete(`${API_BASE}/cron/jobs/${jobId}/history/${runId}`);
+                    set({ jobHistory: get().jobHistory.filter((e: any) => e.run_id !== runId) });
+                } catch (e) {
+                    console.error("Failed to delete history entry", e);
+                }
+            },
+            updateJob: async (id, data) => {
+                try {
+                    await api.put(`${API_BASE}/cron/jobs/${id}`, data);
+                    await get().fetchJobs();
+                } catch (e) {
+                    console.error("Failed to update job", e);
+                    throw e;
                 }
             },
 
@@ -1629,16 +1710,20 @@ export const useAppStore = create<AppState>()(
 
             // --- Remme Slice ---
             memories: [],
+            memoriesLoading: false,
+            memoriesError: false,
             setMemories: (memories) => set({ memories }),
             fetchMemories: async () => {
+                set({ memoriesLoading: true, memoriesError: false });
                 try {
                     const spaceId = get().currentSpaceId;
                     // When Global (null), pass __global__ so backend returns only unscoped memories
                     const filterSpaceId = spaceId ?? '__global__';
                     const res = await api.getMemories(filterSpaceId);
-                    set({ memories: res.memories });
+                    set({ memories: res.memories, memoriesLoading: false });
                 } catch (e) {
                     console.error("Failed to fetch memories", e);
+                    set({ memoriesLoading: false, memoriesError: true });
                 }
             },
             addMemory: async (text, category = "general", space_id) => {

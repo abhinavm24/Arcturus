@@ -6,7 +6,6 @@ from datetime import datetime
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Path as PathParam
 from pydantic import BaseModel
 import requests
-import pdb
 
 from shared.state import (
     get_remme_store,
@@ -471,7 +470,6 @@ async def recommend_space(
     try:
         from memory.space_constants import SPACE_ID_GLOBAL
 
-        # pdb.set_trace()
         # No text or very short: suggest current context or global
         if not (text and text.strip()):
             out = current_space_id if current_space_id and current_space_id != SPACE_ID_GLOBAL else SPACE_ID_GLOBAL

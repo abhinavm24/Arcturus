@@ -108,7 +108,7 @@ export const api = {
 
     getMemories: async (space_id?: string | null): Promise<{ memories: any[] }> => {
         const params = space_id ? { space_id } : {};
-        const res = await axios.get(`${API_BASE}/remme/memories`, { params });
+        const res = await axios.get(`${API_BASE}/remme/memories`, { params, timeout: 8000 });
         return res.data;
     },
 
@@ -172,6 +172,21 @@ export const api = {
     put: axios.put,
     patch: axios.patch,
     delete: axios.delete,
+
+    // Scheduler
+    getJobs: async (): Promise<any[]> => {
+        const res = await axios.get(`${API_BASE}/cron/jobs`);
+        return res.data;
+    },
+
+    triggerJob: async (jobId: string): Promise<void> => {
+        await axios.post(`${API_BASE}/cron/jobs/${jobId}/trigger`);
+    },
+
+    getJobHistory: async (jobId: string, limit: number = 50): Promise<any[]> => {
+        const res = await axios.get(`${API_BASE}/cron/jobs/${jobId}/history`, { params: { limit } });
+        return res.data;
+    },
 
     // Apps
     getApps: async (): Promise<any[]> => {

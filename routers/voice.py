@@ -166,6 +166,17 @@ async def start_listening(request: Request):
     return {"status": "listening"}
 
 
+@router.post("/voice/stop")
+async def stop_listening(request: Request):
+    """
+    Stop recording and immediately process whatever has been spoken so far.
+    If nothing was spoken, goes idle.
+    """
+    orch = _get_orch(request)
+    result = orch.manual_stop()
+    return result
+
+
 # ── Privacy Mode ───────────────────────────────────────────────
 
 @router.get("/voice/privacy")
