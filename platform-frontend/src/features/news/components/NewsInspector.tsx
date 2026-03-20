@@ -70,7 +70,8 @@ export const NewsInspector: React.FC = () => {
         selectedContexts,
         removeSelectedContext,
         clearSelectedContexts,
-        setShowNewsChatPanel
+        setShowNewsChatPanel,
+        localModel
     } = useAppStore();
 
     const [inputValue, setInputValue] = useState('');
@@ -149,7 +150,8 @@ export const NewsInspector: React.FC = () => {
                 body: JSON.stringify({
                     docId: activeUrl,
                     query: articleContext + fullMessage,
-                    history: history
+                    history: history,
+                    model: localModel
                 })
             });
 

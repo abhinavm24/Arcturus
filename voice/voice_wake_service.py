@@ -79,7 +79,7 @@ class VoiceWakeService:
         self._thread.start()
 
     def _loop(self):
-        print("🎙️ [Voice] Priming microphone and engine...")
+        print("[Voice] Priming microphone and engine...")
         # 2.5s warmup — Windows audio drivers often need extra time to stabilize
         warmup_frames = int(2.5 * self.engine.sample_rate / self.engine.frame_length)
         rms_sum = 0.0
@@ -104,7 +104,7 @@ class VoiceWakeService:
             if avg_rms < 10:
                 print("⚠️ [Voice] Microphone appears silent (RMS ≈ 0). "
                       "Check mic permissions or hardware.")
-        print("🎙️ [Voice] Hardware WARM. Listening for wake word now.")
+        print("[Voice] Hardware WARM. Listening for wake word now.")
 
         while self._running:
             try:

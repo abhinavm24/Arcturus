@@ -13,6 +13,7 @@ import { SpacesModal } from '@/components/sidebar/SpacesModal';
 import { AuthModal } from '@/components/auth/AuthModal';
 import { Kbd } from '@/components/ui/kbd';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { EchoDropdown } from './EchoDropdown';
 
 // ── Tab display names for breadcrumb ─────────────────────────────────────────
 const TAB_LABELS: Record<string, string> = {
@@ -223,6 +224,9 @@ export const Header: React.FC = () => {
 
                 {/* Right — Compact controls */}
                 <div className="flex items-center gap-1.5 no-drag">
+                    {/* Echo Voice — global access */}
+                    <EchoDropdown />
+
                     {/* Command Palette hint */}
                     <Tooltip delayDuration={0}>
                         <TooltipTrigger asChild>

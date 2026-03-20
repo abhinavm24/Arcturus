@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Mic, Square, Bot, User, ShieldCheck, Loader2, PlayCircle, Clock, CheckCircle2, XCircle, Zap, Volume2 } from 'lucide-react';
+import { Mic, Square, Bot, User, ShieldCheck, Loader2, PlayCircle, Clock, CheckCircle2, XCircle, Zap, Volume2, Plus, ChevronDown, FileText, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAppStore } from '@/store';
+import { useEchoStore } from '@/features/echo/useEchoStore';
 import { startVoice, stopVoice } from '@/lib/voice';
 
 const WAKE_POLL_URL = 'http://localhost:8000/api/voice/wake';
@@ -17,14 +18,6 @@ const SOURCE_LABEL: Record<string, string> = {
     dictation: 'Dictation',
     agent: 'Arcturus',
 };
-
-interface ConversationEntry {
-    id: string;
-    role: 'user' | 'assistant';
-    text: string;
-    source?: string;
-    ts: number;
-}
 
 interface PrivacyState {
     privacy_mode: boolean;
@@ -45,24 +38,38 @@ interface PersonasState {
     personas: Record<string, PersonaConfig>;
 }
 
+function formatTimeAgo(ts: number): string {
+    const diff = Date.now() - ts;
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'now';
+    if (mins < 60) return `${mins}m`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h`;
+    return `${Math.floor(hrs / 24)}d`;
+}
+
 // ── Component ────────────────────────────────────────────────────────────────
 export const EchoPanel: React.FC = () => {
-    const events = useAppStore(state => state.events);
-    const isStreaming = useAppStore(state => state.isStreaming);
-    const startEventStream = useAppStore(state => state.startEventStream);
-    const setSidebarTab = useAppStore(state => state.setSidebarTab);
-    const sidebarTab = useAppStore(state => state.sidebarTab);
-    const runs = useAppStore(state => state.runs);
-    const setCurrentRun = useAppStore(state => state.setCurrentRun);
+    const events = useAppStore(s => s.events);
+    const isStreaming = useAppStore(s => s.isStreaming);
+    const startEventStream = useAppStore(s => s.startEventStream);
+    const setSidebarTab = useAppStore(s => s.setSidebarTab);
+    const runs = useAppStore(s => s.runs);
+    const setCurrentRun = useAppStore(s => s.setCurrentRun);
 
-    const [isListening, setIsListening] = useState(false);
-    const [voiceState, setVoiceState] = useState<'idle' | 'listening' | 'thinking' | 'speaking'>('idle');
-    const [statusText, setStatusText] = useState('Ready');
-    const [liveTranscript, setLiveTranscript] = useState('');
-    const [nexusRunActive, setNexusRunActive] = useState(false);
-    const [conversation, setConversation] = useState<ConversationEntry[]>([]);
-    // Track which tab user is viewing (conversation vs runs)
+    // Shared echo store — voice state, sessions, conversation
+    const {
+        voiceState, statusText, liveTranscript, nexusRunActive,
+        sessions, activeSessionId,
+        processEvents, createSession, switchSession, endSession, clearAllSessions, addMessage,
+        setVoiceState, setStatusText, setLiveTranscript, setNexusRunActive,
+    } = useEchoStore();
+
+    const activeSession = sessions.find(s => s.id === activeSessionId);
+    const conversation = activeSession?.conversation ?? [];
+
     const [activeView, setActiveView] = useState<'conversation' | 'runs'>('conversation');
+    const [showSessions, setShowSessions] = useState(false);
 
     // ── Privacy ──────────────────────────────────────────────────────────────
     const [privacy, setPrivacy] = useState<PrivacyState | null>(null);
@@ -91,15 +98,15 @@ export const EchoPanel: React.FC = () => {
                     stt_provider: data.privacy_mode ? 'whisper' : 'deepgram',
                     tts_provider: data.privacy_mode ? 'piper' : 'azure',
                 });
-                setConversation(c => [...c, {
+                addMessage({
                     id: `sys-${Date.now()}`,
                     role: 'assistant',
                     text: data.privacy_mode
-                        ? `🔒 Privacy Mode ON — switched to ${data.stt} + ${data.tts}. No data leaves your device.`
-                        : `☁️ Privacy Mode OFF — switched to ${data.stt} + ${data.tts}.`,
+                        ? `Privacy Mode ON \u2014 switched to ${data.stt} + ${data.tts}. No data leaves your device.`
+                        : `Privacy Mode OFF \u2014 switched to ${data.stt} + ${data.tts}.`,
                     source: 'system',
                     ts: Date.now(),
-                }]);
+                });
             }
         } catch (e) {
             console.error('Privacy toggle failed', e);
@@ -119,27 +126,8 @@ export const EchoPanel: React.FC = () => {
         } catch { /* backend not ready */ }
     }, []);
 
-    const handleResetConversation = async () => {
-        try {
-            const res = await fetch('http://localhost:8000/api/voice/session', {
-                method: 'DELETE',
-            });
-            if (res.ok) {
-                setConversation([]);
-                setStatusText('Conversation ended and cleared.');
-                liveTranscriptRef.current = '';
-                setLiveTranscript('');
-                // Brief reassurance before returning to idle
-                setTimeout(() => setStatusText('Waiting for wake word...'), 2000);
-            }
-        } catch (e) {
-            console.error('Failed to end conversation', e);
-        }
-    };
-
     const changePersona = async (name: string) => {
-        if (personaChanging || !personasState) return;
-        if (name === personasState.active) return;
+        if (personaChanging || !personasState || name === personasState.active) return;
         setPersonaChanging(true);
         try {
             const res = await fetch(PERSONA_BASE_URL, {
@@ -150,13 +138,13 @@ export const EchoPanel: React.FC = () => {
             if (res.ok) {
                 setPersonasState(prev => prev ? { ...prev, active: name } : prev);
                 const desc = personasState.personas[name]?.description ?? '';
-                setConversation(c => [...c, {
+                addMessage({
                     id: `sys-${Date.now()}`,
                     role: 'assistant',
-                    text: `🎙️ Voice persona switched to "${name}"${desc ? ` — ${desc}` : ''}.`,
+                    text: `Voice persona switched to "${name}"${desc ? ` \u2014 ${desc}` : ''}.`,
                     source: 'system',
                     ts: Date.now(),
-                }]);
+                });
             }
         } catch (e) {
             console.error('Persona change failed', e);
@@ -166,12 +154,10 @@ export const EchoPanel: React.FC = () => {
     };
 
     // ── Refs ─────────────────────────────────────────────────────────────────
-    const nexusRunRef = useRef(false);
-    nexusRunRef.current = nexusRunActive;
-    const liveTranscriptRef = useRef('');
     const bottomRef = useRef<HTMLDivElement>(null);
+    const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-    // Auto-scroll to bottom when new messages arrive
+    // Auto-scroll
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [conversation, liveTranscript]);
@@ -179,11 +165,13 @@ export const EchoPanel: React.FC = () => {
     // Fetch privacy + personas on mount
     useEffect(() => { fetchPrivacy(); fetchPersonas(); }, [fetchPrivacy, fetchPersonas]);
 
-    // Start SSE stream on mount
+    // Start SSE
     useEffect(() => { startEventStream(); }, [startEventStream]);
 
+    // Process SSE events through shared store
+    useEffect(() => { processEvents(events); }, [events, processEvents]);
+
     // ── Polling fallback ─────────────────────────────────────────────────────
-    const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
     useEffect(() => {
         pollRef.current = setInterval(async () => {
             try {
@@ -191,171 +179,54 @@ export const EchoPanel: React.FC = () => {
                 if (!res.ok) return;
                 const json = await res.json();
                 if (json.wake) {
-                    setIsListening(true);
                     setVoiceState('listening');
                     setStatusText('Listening...');
-                    liveTranscriptRef.current = '';
                     setLiveTranscript('');
                     setNexusRunActive(false);
-                    if (sidebarTab !== 'echo') setSidebarTab('echo');
                 }
                 const s = json.state;
                 if (!json.wake && s) {
-                    const nexusActive = nexusRunRef.current;
+                    const echoState = useEchoStore.getState();
                     if (s === 'IDLE') {
-                        setIsListening(false);
                         setVoiceState('idle');
                         setStatusText('Ready');
                         setNexusRunActive(false);
                     } else if (s === 'THINKING') {
-                        setIsListening(true);
                         setVoiceState('thinking');
-                        setStatusText(nexusActive ? 'Processing with Nexus...' : 'Thinking...');
+                        setStatusText(echoState.nexusRunActive ? 'Processing with Nexus...' : 'Thinking...');
                     } else if (s === 'SPEAKING') {
                         setVoiceState('speaking');
-                        if (!nexusActive) { setIsListening(true); setStatusText('Speaking...'); }
+                        if (!echoState.nexusRunActive) setStatusText('Speaking...');
                     } else if (s === 'DICTATING') {
-                        setIsListening(true);
-                        setStatusText('Dictating — say "stop dictation" to finish.');
+                        setVoiceState('dictating');
+                        setStatusText('Dictating \u2014 say "stop dictation" to finish.');
                     }
                 }
             } catch { /* backend not up */ }
         }, 1000);
         return () => { if (pollRef.current) clearInterval(pollRef.current); };
-    }, [sidebarTab, setSidebarTab]);
+    }, [setVoiceState, setStatusText, setLiveTranscript, setNexusRunActive]);
 
-    // ── SSE event handler (Robustly processes ALL new events) ────────────────
-    const lastProcessedIndex = useRef(-1);
-    useEffect(() => {
-        if (!events || events.length === 0) {
-            lastProcessedIndex.current = -1;
-            return;
-        }
-
-        // Process all events from (lastProcessedIndex + 1) to the end
-        const startIndex = lastProcessedIndex.current + 1;
-        for (let i = startIndex; i < events.length; i++) {
-            const ev = events[i];
-            
-            if (ev.type === 'voice_wake') {
-                const isBargeIn = ev.data?.barge_in === true;
-                setIsListening(true);
-                setVoiceState('listening');
-                setStatusText(isBargeIn ? '⚡ Barge-in detected!' : 'Listening...');
-                liveTranscriptRef.current = '';
-                setLiveTranscript('');
-                setNexusRunActive(false);
-
-                // Stop agent runs on wake
-                useAppStore.getState().stopPolling();
-                useAppStore.getState().setCurrentRun(null);
-
-                if (isBargeIn) {
-                    // Append barge-in notice — preserve conversation history
-                    setConversation(c => [...c, {
-                        id: `sys-barge-${Date.now()}`,
-                        role: 'assistant',
-                        text: '⚡ Barge-in detected',
-                        source: 'system',
-                        ts: Date.now(),
-                    }]);
-                }
-
-                if (sidebarTab !== 'echo') setSidebarTab('echo');
-            } else if (ev.type === 'voice_stt') {
-                if (ev.data?.full_text) {
-                    liveTranscriptRef.current = ev.data.full_text;
-                    setLiveTranscript(ev.data.full_text);
-                }
-            } else if (ev.type === 'voice_nexus_run') {
-                const active = ev.data?.active === true;
-                setNexusRunActive(active);
-                if (active) {
-                    setIsListening(true);
-                    setVoiceState('thinking');
-                    setStatusText('Processing with Nexus...');
-                    // Capture value before clearing — ref is mutable and would
-                    // be empty by the time React runs the setConversation updater.
-                    const nexusTranscript = liveTranscriptRef.current.trim();
-                    liveTranscriptRef.current = '';
-                    setLiveTranscript('');
-                    if (nexusTranscript) {
-                        setConversation(c => [...c, {
-                            id: `u-${Date.now()}`,
-                            role: 'user',
-                            text: nexusTranscript,
-                            ts: Date.now(),
-                        }]);
-                    }
-                }
-            } else if (ev.type === 'voice_tts') {
-                if (ev.data?.text?.trim()) {
-                    setConversation(c => [...c, {
-                        id: `a-${Date.now()}-${Math.random()}`,
-                        role: 'assistant',
-                        text: ev.data.text.trim(),
-                        source: ev.data.source,
-                        ts: Date.now(),
-                    }]);
-                }
-            } else if (ev.type === 'voice_state') {
-                const s = ev.data?.state;
-                if (s === 'LISTENING') {
-                    setIsListening(true);
-                    setVoiceState('listening');
-                    setStatusText(prev => prev === '⚡ Barge-in detected!' ? prev : 'Listening...');
-                    setNexusRunActive(false);
-                } else if (s === 'THINKING') {
-                    setVoiceState('thinking');
-                    setIsListening(true);
-                    setStatusText(nexusRunRef.current ? 'Processing with Nexus...' : 'Thinking...');
-                    const thinkTranscript = liveTranscriptRef.current.trim();
-                    liveTranscriptRef.current = '';
-                    setLiveTranscript('');
-                    if (thinkTranscript) {
-                        setConversation(c => [...c, {
-                            id: `u-${Date.now()}`, role: 'user', text: thinkTranscript, ts: Date.now(),
-                        }]);
-                    }
-                } else if (s === 'SPEAKING') {
-                    setVoiceState('speaking');
-                    if (!nexusRunRef.current) { setIsListening(true); setStatusText('Speaking...'); }
-                } else if (s === 'DICTATING') {
-                    setIsListening(true); setStatusText('Dictating — say "stop dictation" to finish.');
-                } else if (s === 'IDLE') {
-                    setIsListening(false); setVoiceState('idle'); setStatusText('Ready'); setNexusRunActive(false);
-                    const idleTranscript = liveTranscriptRef.current.trim();
-                    liveTranscriptRef.current = '';
-                    setLiveTranscript('');
-                    if (idleTranscript) {
-                        setConversation(c => [...c, {
-                            id: `u-${Date.now()}`, role: 'user', text: idleTranscript, ts: Date.now(),
-                        }]);
-                    }
-                }
-            }
-        }
-        
-        lastProcessedIndex.current = events.length - 1;
-    }, [events, sidebarTab, setSidebarTab]);
+    // ── Handlers ─────────────────────────────────────────────────────────────
 
     const handleMicToggle = async () => {
-        if (isListening && voiceState === 'listening') {
-            // Stop: process what's been said so far
+        if (voiceState === 'listening' || voiceState === 'dictating') {
             await stopVoice();
-            setStatusText('Processing...');
-        } else {
-            // Start listening
+            setStatusText(voiceState === 'dictating' ? 'Stopping dictation...' : 'Processing...');
+        } else if (voiceState === 'idle') {
             await startVoice();
-            setIsListening(true);
             setVoiceState('listening');
             setStatusText('Listening...');
         }
     };
 
-    const isPrivate = privacy?.privacy_mode ?? false;
+    const handleNewSession = () => { createSession(); setShowSessions(false); };
+    const handleSwitchSession = (id: string) => { switchSession(id); setShowSessions(false); };
 
-    // ── Runs (newest first, cap 10) ──────────────────────────────────────────
+    const isPrivate = privacy?.privacy_mode ?? false;
+    const recentSessions = sessions.slice(0, 6);
+
+    // Runs (newest first, cap 10)
     const recentRuns = [...runs]
         .sort((a, b) => b.createdAt - a.createdAt)
         .slice(0, 10);
@@ -367,14 +238,69 @@ export const EchoPanel: React.FC = () => {
             {/* ── Header ──────────────────────────────────────────────── */}
             <div className="px-3 py-2.5 border-b border-border/50 bg-muted/20 shrink-0 space-y-1.5">
                 <div className="flex items-center justify-between">
-                    <h2 className="text-base font-semibold text-primary/90 flex items-center gap-2 tracking-tight">
+                    <h2 className="text-base font-semibold text-primary/90 flex items-center gap-2 tracking-tight shrink-0">
                         Echo
                         <span
                             title={isStreaming ? 'Event stream connected' : 'Event stream disconnected'}
                             className={`w-2 h-2 rounded-full shrink-0 ${isStreaming ? 'bg-green-400 animate-pulse' : 'bg-red-500'}`}
                         />
                     </h2>
-                    <span className="text-2xs text-muted-foreground/60">Talk to Arcturus hands-free</span>
+
+                    <div className="flex items-center gap-1">
+                        {/* Session selector */}
+                        <div className="relative">
+                            <button
+                                onClick={() => setShowSessions(!showSessions)}
+                                className="flex items-center gap-1 px-1.5 py-0.5 rounded text-2xs text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors max-w-[120px]"
+                            >
+                                <span className="truncate">{activeSession?.title || 'New Session'}</span>
+                                <ChevronDown className="w-2.5 h-2.5 shrink-0" />
+                            </button>
+                            {showSessions && (
+                                <>
+                                    <div className="fixed inset-0 z-40" onClick={() => setShowSessions(false)} />
+                                    <div className="absolute right-0 top-full mt-1 w-[240px] bg-popover border border-border rounded-lg shadow-xl z-50 py-1 animate-content-in">
+                                        <button
+                                            onClick={handleNewSession}
+                                            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-primary hover:bg-primary/10 transition-colors"
+                                        >
+                                            <Plus className="w-3 h-3" />
+                                            New Session
+                                        </button>
+                                        <button
+                                            onClick={() => { clearAllSessions(); setShowSessions(false); }}
+                                            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-red-400/80 hover:bg-red-400/10 transition-colors"
+                                        >
+                                            <Trash2 className="w-3 h-3" />
+                                            Clear All Sessions
+                                        </button>
+                                        {recentSessions.length > 0 && <div className="h-px bg-border/50 my-1" />}
+                                        {recentSessions.map(s => (
+                                            <button
+                                                key={s.id}
+                                                onClick={() => handleSwitchSession(s.id)}
+                                                className={cn(
+                                                    'w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors text-left',
+                                                    s.id === activeSessionId
+                                                        ? 'bg-primary/10 text-primary'
+                                                        : 'text-muted-foreground hover:text-foreground hover:bg-muted/30'
+                                                )}
+                                            >
+                                                <FileText className="w-3 h-3 shrink-0" />
+                                                <span className="truncate flex-1">{s.title}</span>
+                                                <span className="text-2xs text-muted-foreground/50 shrink-0">
+                                                    {formatTimeAgo(s.createdAt)}
+                                                </span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                        <button onClick={handleNewSession} className="shrink-0 p-1 rounded hover:bg-muted/40 text-muted-foreground hover:text-primary transition-colors" title="New session">
+                            <Plus className="w-3.5 h-3.5" />
+                        </button>
+                    </div>
                 </div>
 
                 {/* Compact provider info + persona — single row */}
@@ -382,7 +308,7 @@ export const EchoPanel: React.FC = () => {
                     <button
                         onClick={togglePrivacy}
                         disabled={privacyLoading || !privacy}
-                        title={isPrivate ? 'Local mode — click for cloud' : 'Cloud mode — click for local'}
+                        title={isPrivate ? 'Local mode \u2014 click for cloud' : 'Cloud mode \u2014 click for local'}
                         className={cn(
                             'shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded text-2xs font-medium transition-all border',
                             isPrivate
@@ -444,7 +370,9 @@ export const EchoPanel: React.FC = () => {
                                 ? 'bg-amber-500/20 text-amber-400 shadow-[0_0_30px_rgba(245,158,11,0.3)]'
                                 : voiceState === 'speaking'
                                     ? 'bg-violet-500/20 text-violet-400 shadow-[0_0_30px_rgba(139,92,246,0.35)]'
-                                    : 'bg-muted/50 text-muted-foreground hover:bg-primary/15 hover:text-primary hover:shadow-[0_0_20px_rgba(56,189,248,0.2)] hover:scale-105',
+                                    : voiceState === 'dictating'
+                                        ? 'bg-emerald-500/20 text-emerald-400 shadow-[0_0_40px_rgba(16,185,129,0.4)] scale-105'
+                                        : 'bg-muted/50 text-muted-foreground hover:bg-primary/15 hover:text-primary hover:shadow-[0_0_20px_rgba(56,189,248,0.2)] hover:scale-105',
                         (voiceState === 'thinking' || voiceState === 'speaking') && 'cursor-not-allowed'
                     )}
                 >
@@ -460,6 +388,9 @@ export const EchoPanel: React.FC = () => {
                     {voiceState === 'speaking' && (
                         <span className="absolute inset-0 rounded-full border-2 border-violet-400/40 animate-pulse" />
                     )}
+                    {voiceState === 'dictating' && (
+                        <span className="absolute inset-0 rounded-full border-2 border-emerald-400/40 animate-pulse" />
+                    )}
 
                     {voiceState === 'listening' ? (
                         <Square className="w-6 h-6 relative z-10" />
@@ -467,18 +398,21 @@ export const EchoPanel: React.FC = () => {
                         <Loader2 className="w-6 h-6 relative z-10 animate-spin" />
                     ) : voiceState === 'speaking' ? (
                         <Volume2 className="w-6 h-6 relative z-10 animate-pulse" />
+                    ) : voiceState === 'dictating' ? (
+                        <Square className="w-6 h-6 relative z-10" />
                     ) : (
                         <Mic className="w-6 h-6 relative z-10" />
                     )}
                 </button>
 
-                {/* Status + hint on one line */}
+                {/* Status */}
                 <span className={cn(
                     'text-xs font-semibold tracking-wide text-center transition-colors duration-200',
                     voiceState === 'listening' ? 'text-red-400'
                         : voiceState === 'thinking' ? 'text-amber-400'
                             : voiceState === 'speaking' ? 'text-violet-400'
-                                : 'text-muted-foreground'
+                                : voiceState === 'dictating' ? 'text-emerald-400'
+                                    : 'text-muted-foreground'
                 )}>
                     {statusText}
                 </span>
@@ -537,7 +471,7 @@ export const EchoPanel: React.FC = () => {
                         {conversation.length > 0 && (
                             <div className="shrink-0 flex justify-end mb-1">
                                 <button
-                                    onClick={handleResetConversation}
+                                    onClick={() => endSession()}
                                     className="flex items-center gap-1.5 px-2 py-1 text-2xs font-bold uppercase tracking-wider text-muted-foreground/60 hover:text-red-400 bg-muted/20 hover:bg-red-400/10 rounded-md border border-border/20 hover:border-red-400/30 transition-all duration-200"
                                 >
                                     <XCircle className="w-3 h-3" />
@@ -547,7 +481,6 @@ export const EchoPanel: React.FC = () => {
                         )}
                         {conversation.length === 0 && !liveTranscript && (
                             <div className="flex-1 flex flex-col items-center justify-center text-center gap-5 select-none py-6 px-4">
-                                {/* Examples */}
                                 <div className="w-full max-w-[240px] space-y-3">
                                     <div className="flex items-center gap-2">
                                         <div className="h-px flex-1 bg-border/20" />
@@ -669,7 +602,6 @@ export const EchoPanel: React.FC = () => {
                                             )}
                                         >
                                             <div className="flex items-start gap-2.5">
-                                                {/* Status icon */}
                                                 <div className="shrink-0 mt-0.5">
                                                     {status === 'running' ? (
                                                         <Loader2 className={cn(
@@ -682,8 +614,6 @@ export const EchoPanel: React.FC = () => {
                                                         <XCircle className="w-3.5 h-3.5 text-red-400" />
                                                     )}
                                                 </div>
-
-                                                {/* Run info */}
                                                 <div className="flex-1 min-w-0">
                                                     <p className={cn(
                                                         'text-xs font-medium leading-snug truncate',
@@ -697,13 +627,11 @@ export const EchoPanel: React.FC = () => {
                                                         <Clock className="w-2.5 h-2.5 text-muted-foreground/50 shrink-0" />
                                                         <span className="text-xs text-muted-foreground/60">
                                                             {new Date(run.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                                            {' · '}
+                                                            {' \u00B7 '}
                                                             {new Date(run.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}
                                                         </span>
                                                     </div>
                                                 </div>
-
-                                                {/* Status pill */}
                                                 <span className={cn(
                                                     'shrink-0 self-start px-1.5 py-0.5 rounded text-2xs uppercase font-bold tracking-wide',
                                                     status === 'completed' && 'bg-emerald-500/10 text-emerald-400/80',

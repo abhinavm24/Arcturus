@@ -1317,14 +1317,9 @@ export const useAppStore = create<AppState>()(
             }),
             removeSelectedContext: (index) => {
                 const newContexts = get().selectedContexts.filter((_, i) => i !== index);
-                // Close chat panel when all contexts are removed
-                if (newContexts.length === 0) {
-                    set({ selectedContexts: newContexts, showNewsChatPanel: false });
-                } else {
-                    set({ selectedContexts: newContexts });
-                }
+                set({ selectedContexts: newContexts });
             },
-            clearSelectedContexts: () => set({ selectedContexts: [], showNewsChatPanel: false }),
+            clearSelectedContexts: () => set({ selectedContexts: [] }),
             selectedMcpServer: null,
             setSelectedMcpServer: (server) => set({ selectedMcpServer: server }),
             showRagInsights: false,

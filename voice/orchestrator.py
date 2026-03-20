@@ -196,7 +196,7 @@ class Orchestrator:
             if prev_state in ("SPEAKING", "THINKING"):
                 print(f"⚡ [Orchestrator] Wake during {prev_state} → LISTENING")
             else:
-                print("🎙️ [Orchestrator] Wake word detected. Listening...")
+                print("[Orchestrator] Wake word detected. Listening...")
 
             self._cancel_follow_up()
             self._cancel_silence_timer()
@@ -222,7 +222,7 @@ class Orchestrator:
         if not is_barge_in:
             self.stt.cancel()   # fresh wake — drop any stale buffer
         else:
-            print("🎙️ [Orchestrator] Barge-in STT: keeping pre-filled frames alive")
+            print("[Orchestrator] Barge-in STT: keeping pre-filled frames alive")
 
         # Stop the in-flight Nexus run so it doesn't complete silently
         active_run = self._active_run_id
@@ -1197,7 +1197,7 @@ class Orchestrator:
             try:
                 # Do NOT set SPEAKING state yet. We wait until the first sentence is ready.
                 tts_started_event.set() 
-                print(f"🎙️ [Orchestrator] TTS consumer STARTED — calling speak_streamed()")
+                print(f"[Orchestrator] TTS consumer STARTED — calling speak_streamed()")
                 
                 # Pass a callback to publish sentences as they are spoken
                 def _on_sentence(text):
