@@ -18,7 +18,9 @@ That means one product where you can:
 
 ## Demo
 
-- YouTube walkthrough: [Arcturus product demo](https://youtu.be/PUfb0chxeQg)
+[![Watch the Arcturus product demo](docs/About.png)](https://youtu.be/PUfb0chxeQg)
+
+Watch the full walkthrough on YouTube: [Arcturus product demo](https://youtu.be/PUfb0chxeQg)
 
 ## App Guide
 
