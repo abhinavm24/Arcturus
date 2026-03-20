@@ -4,9 +4,37 @@ Arcturus is a local-first AI workspace that brings agents, memory, documents, vo
 
 It is designed for people who want more than a chat window. You can explore files, run agent workflows, build artifacts, inspect memory, browse knowledge graphs, manage skills, and operate the system from a single interface.
 
+## Why Arcturus
+
+We built Arcturus to help teams and students move beyond isolated AI demos and into real end-to-end application building.
+
+That means one product where you can:
+
+- work with agents, not just prompts
+- connect memory, retrieval, workflows, and UI in the same system
+- generate artifacts, apps, and reports instead of only chat responses
+- inspect how the system runs through traces, health, and execution views
+- operate AI features like a product team, with testing, controls, and reusable skills
+
 ## Demo
 
 - YouTube walkthrough: [Arcturus product demo](https://youtu.be/PUfb0chxeQg)
+
+## App Guide
+
+| Area | What it does | Why it matters |
+| --- | --- | --- |
+| Echo | voice assistant for questions, commands, dictation, and spoken workflows | makes the system hands-free and accessible in real time |
+| Runs | execution graph for agent tasks, intermediate outputs, and orchestration state | makes agent behavior inspectable instead of opaque |
+| Forge | structured document and slide generation with preview and export flows | turns prompts into usable deliverables |
+| Apps | internal app and dashboard generation inside the platform | helps users build actual tools, not just responses |
+| IDE | editor, terminal, file navigation, and code-aware IDE Agent | supports end-to-end coding and implementation work |
+| RAG | indexed retrieval over notes, PDFs, and project content | grounds answers in source material |
+| RemMe | persistent memory, recall, and profile context | improves continuity across sessions and workflows |
+| Graph | visual explorer for extracted entities and relationships | turns memory and content into navigable structure |
+| Scheduler | recurring jobs, automation runs, and execution history | makes the platform useful beyond one-off interaction |
+| Watchtower | diagnostics, tracing, health, and runtime controls | provides production-style observability and governance |
+| Skills / Bazaar | installable capabilities and reusable packaged logic | supports extensibility and distribution |
 
 ## Screenshots
 
@@ -16,17 +44,11 @@ Arcturus ships as a unified workspace rather than a collection of disconnected t
 
 ![Arcturus overview](docs/About.png)
 
-### Echo
+### Apps
 
-Echo is the voice-native interface for Arcturus. It supports hands-free interaction for asking questions, navigating the product, triggering agent workflows, and dictating notes.
+Apps turns Arcturus into an application builder, not just an assistant. The platform can generate and host internal dashboards, workflows, and interactive tools directly inside the product.
 
-![Echo voice assistant](docs/Echo.png)
-
-### Runs
-
-Runs shows the live structure of agent execution. You can inspect orchestration graphs, active tasks, intermediate outputs, and the data each step is producing.
-
-![Runs orchestration view](docs/Runs.png)
+![Apps builder output](docs/Apps.png)
 
 ### Forge
 
@@ -34,17 +56,23 @@ Forge is the structured artifact studio. It can generate decks and documents fro
 
 ![Forge artifact studio](docs/Forge.png)
 
-### Apps
+### Runs
 
-Apps turns Arcturus into an application builder, not just an assistant. The platform can generate and host internal dashboards, workflows, and interactive tools directly inside the product.
+Runs shows the live structure of agent execution. You can inspect orchestration graphs, active tasks, intermediate outputs, and the data each step is producing.
 
-![Apps builder output](docs/Apps.png)
+![Runs orchestration view](docs/Runs.png)
 
 ### IDE
 
 The IDE workspace combines a code editor, terminal, file navigation, and an IDE Agent that can inspect code, call tools, and help execute coding workflows end to end.
 
 ![IDE agent workspace](docs/IDE.png)
+
+### Echo
+
+Echo is the voice-native interface for Arcturus. It supports hands-free interaction for asking questions, navigating the product, triggering agent workflows, and dictating notes.
+
+![Echo voice assistant](docs/Echo.png)
 
 ### Knowledge Graph
 
