@@ -81,6 +81,14 @@ export const ElectronBrowserView: React.FC = () => {
         resizeObserverRef.current.observe(containerRef.current);
         window.addEventListener('resize', updateBounds);
 
+        // Listen for app zoom changes (Ctrl+/-) via devicePixelRatio media query
+        const dprMediaQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+        const handleDprChange = () => {
+            // DPR changed = app zoom changed, recalculate bounds
+            updateBounds();
+        };
+        dprMediaQuery.addEventListener('change', handleDprChange);
+
         // Initial bounds update with delay to ensure layout is complete
         const timer = setTimeout(() => {
             updateBounds();
@@ -90,6 +98,7 @@ export const ElectronBrowserView: React.FC = () => {
             clearTimeout(timer);
             resizeObserverRef.current?.disconnect();
             window.removeEventListener('resize', updateBounds);
+            dprMediaQuery.removeEventListener('change', handleDprChange);
         };
     }, [updateBounds]);
 
